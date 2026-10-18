@@ -18,13 +18,19 @@
 
 ```
 ~/projects/RUST/ai-translator/
-├── .git/                 (один коммит: docs)
+├── .git/                 (коммиты: docs; README/LICENSE/.gitignore добавлены)
+├── .hermes/plans/        настоящий план
+├── .gitignore            исключения проекта
+├── LICENSE               указатель двойного лицензирования
+├── LICENSE-APACHE        Apache License 2.0
+├── LICENSE-MIT           MIT License
+├── README.md             описание проекта (на английском)
 └── docs/
     ├── methods.txt       исходные материалы по протоколам доставки
     └── TZ_ai-translator_v0.1.md   техническое задание
 ```
 
-Кода нет. Всё, что описано ниже, создаётся с нуля.
+Кода нет. Всё, что описано ниже, создаётся с нуля. README, `.gitignore` и файлы лицензии уже готовы и в задачах 1 и 18 не создаются повторно.
 
 ### 0.2. Что уже даёт `transono` (проверено по исходникам)
 
@@ -81,7 +87,7 @@
 **Файлы:**
 - Создать: `flake.nix`
 - Создать: `.envrc`
-- Создать: `.gitignore`
+- Уже есть (созданы заранее, не пересоздавать): `.gitignore`, `README.md`, `LICENSE`, `LICENSE-MIT`, `LICENSE-APACHE`
 
 **Шаг 1.** `flake.nix` — dev-shell с составом, необходимым для линковки с `transono` (pipewire, alsa-lib, openssl, clang, pkg-config, rust-analyzer):
 
@@ -130,17 +136,7 @@ EOF
 
 **Шаг 2.** `.envrc` — одна строка: `use flake`.
 
-**Шаг 3.** `.gitignore`:
-
-```
-/target
-/.cargo
-/.direnv
-*.wav
-.env
-```
-
-**Шаг 4.** Проверка.
+**Шаг 3.** Проверка.
 
 ```bash
 cd ~/projects/RUST/ai-translator
@@ -1708,10 +1704,10 @@ async fn text_source_reaches_two_text_sinks_in_parallel() {
 ### Задача 18: Документация проекта
 
 **Файлы:**
-- Создать: `README.md`
+- Поддерживать: `README.md` (уже создан на английском: назначение, схема, таблица приёмников, пример конфигурации, сборка и запуск)
 - Создать: `AGENTS.md`
 
-**Шаг 1.** `README.md`: назначение, схема «источник → ядро → шина → приёмники», быстрый старт (`nix develop`, `cargo run -- run --config …`), таблица приёмников с колонкой «этап», пример конфигурации.
+**Шаг 1.** `README.md` — по ходу работ дополнять: привести таблицу приёмников в соответствие с реализованным, добавить реальные команды запуска и актуальный список зависимостей. Язык — английский.
 **Шаг 2.** `AGENTS.md`: правила работы с кодом — без `unwrap()`/`panic!` в рабочем коде, `Result` проекта, без аллокаций на аудиопотоке, doc-комментарии на публичных интерфейсах, `clippy` без предупреждений, общение на русском.
 
 ---
@@ -1739,7 +1735,9 @@ async fn text_source_reaches_two_text_sinks_in_parallel() {
 
 | Путь | Назначение |
 |---|---|
-| `flake.nix`, `.envrc`, `.gitignore` | окружение сборки |
+| `flake.nix`, `.envrc` | окружение сборки |
+| `README.md`, `LICENSE`, `LICENSE-MIT`, `LICENSE-APACHE`, `.gitignore` | уже созданы |
+| `AGENTS.md` | правила работы с кодом |
 | `Cargo.toml` | зависимости |
 | `src/lib.rs`, `src/main.rs` | вход |
 | `src/app.rs` | сборка и жизненный цикл системы |
@@ -1756,7 +1754,6 @@ async fn text_source_reaches_two_text_sinks_in_parallel() {
 | `web/index.html` | страница большого экрана |
 | `examples/config.*.toml` | примеры конфигураций |
 | `tests/pipeline.rs` | интеграционный тест |
-| `README.md`, `AGENTS.md` | документация проекта |
 
 ## 3. Проверка и тесты
 
