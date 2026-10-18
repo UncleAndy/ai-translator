@@ -357,7 +357,7 @@ git -c user.name="Andrey Velikoredchanin" -c user.email="andy@uncleandyv.com" \
 - В darwin-шелле Linux-пакетов **нет**, в linux-шелле они **есть** — контрольная проверка, что тест их вообще видит. Способ: оценка `devShells.aarch64-darwin.default.drvPath` из **чистой копии флейка** (на грязном git-дереве `builtins.getFlake` падает с `Permission denied` на `.git/objects`, и тогда «пусто» в выводе — ложь, а не результат), затем `nix derivation show <drv>` и поиск `pipewire|alsa|glibc` среди входов.
 - Регрессия §0.1 зелёная: `fmt` чисто, `clippy -D warnings` exit=0 (код возврата снят без маскировки пайпом), 104 + 3 + 3 теста, страница 28 проверок, `transono` — сборка бинарников и 123 теста.
 
-**Что осталось у флейка:** `transono/flake.nix` содержит те же три пакета плюс хелпер `fixRights` с `sudo chown andy:hermes` — тот же приём применяется к нему отдельной задачей внутри `transono` (не блокирует сборку `ai-translator`, но нужен, чтобы `nix develop` там работал на macOS).
+**Флейк `transono` — сделано 18 октября 2026, коммит `53f27e7`:** те же три пакета (`glibc.dev`, `alsa-lib`, `pipewire`) и хелпер `fixRights` (`sudo chown -R andy:hermes ./`, хост-имена внутри) уехали в Linux-условие; `PKG_CONFIG_PATH` под darwin теперь `openssl`, под Linux — ровно прежний `pipewire:alsa`; `BINDGEN_EXTRA_CLANG_ARGS` выдаётся только на Linux, и в `shellHook`, и в `.cargo/config.toml`. Проверено: в darwin-шелле нет ни `pipewire/alsa/glibc`, ни `fixr`; в linux-шелле все три на месте (контроль); Linux — сборка бинарников, 123 теста, набор зависимостей прежний, `.cargo/config.toml` побайтово тот же.
 
 **Файл:** `~/projects/RUST/ai-translator/flake.nix`
 
@@ -758,7 +758,7 @@ jobs:
 |---|---|
 | `transono`: сборка (`cargo build --bins`) и тесты | 123 теста, 0 провалов (как в задаче 0); fmt/clippy не гейт — см. §0.2 |
 | `transono`: набор зависимостей под Linux | `cpal` с фичами `pipewire`+`realtime`, `pipewire`, `libspa-sys` — как сейчас |
-| `ai-translator`: fmt, clippy, тесты | 104 + 3 + 3, без изменений |
+| `ai-translator`: fmt, clippy, тесты | 109 + 3 + 3 (104 + 5 у команды `devices`), без изменений |
 | Страница (`web/test/page.mjs`) | 28 проверок, «ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ» |
 | `nix develop` + `.cargo/config.toml` | файл побайтово как до правки |
 | `cargo tree --target aarch64-apple-darwin` | нет `pipewire`/`libspa`/`alsa`, есть `cpal` + `objc2-core-audio` |
@@ -773,7 +773,7 @@ jobs:
 2. **Нет `realtime`-фичи на macOS.** `audio_thread_priority` Linux-only, значит на macOS нет того же подъёма приоритета аудиопотока. CoreAudio обычно сам выставляет приоритет своим потокам, но задержки и стабильность могут отличаться — проверять на пунктах 6–9 приёмки.
 3. **Проверка только на Mac.** Здесь я могу проверить граф зависимостей, гейты и Linux-регрессии, но не сборку и не звук под darwin.
 4. **TCC.** Разрешение привязано к терминалу; при запуске из другого окружения (launchd, .app) потребуется отдельная выдача и `Info.plist`.
-5. **`daemonize` под darwin** (только бинарник `transonovirt`): вероятно работает, но проверяется на Mac; при отказе — `#[cfg(unix)]` и запись в отчёт.
+5. **`daemonize` под darwin** — снят: единственный, кто его использует, — `transonovirt`, а он закрыт гейтом `target_os = "linux"` (под darwin на его месте честная заглушка). Сборка бинарников под darwin проверена кросс-сборкой в задаче 4.
 6. **Двойной `cpal` в манифесте** (общий + linux-секция) — приём корректный, но требует проверки, что на Linux набор фич не изменился (проверяется `cargo tree` под Linux, задача 1, шаг 4).
 
 **Вне области этого порта (отдельные решения):**
