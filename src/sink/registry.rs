@@ -93,15 +93,60 @@ pub fn build_voice_sink(id: &str, cfg: &VoiceSinkConfig) -> Result<Box<dyn Voice
             monitor_original,
             ..
         } => Ok(Box::new(VirtualSink::new(id, device, *monitor_original)?)),
-        VoiceSinkConfig::TelegramCall { .. } => Err(SinkError::Unavailable(
-            if crate::config::telegram_call_supported() {
-                "трансляция в голосовой чат ещё не подключена в этой ревизии"
-            } else {
-                "эта сборка не умеет транслировать в голосовой чат: \
-                 платформа или архитектура не поддерживается"
+        VoiceSinkConfig::TelegramCall {
+            chat_id,
+            api_id_env,
+            api_hash_env,
+            session_file,
+            create_if_missing,
+            ..
+        } => {
+            if !crate::config::telegram_call_supported() {
+                return Err(SinkError::Unavailable(
+                    "эта сборка не умеет транслировать в голосовой чат: \
+                     платформа или архитектура не поддерживается"
+                        .into(),
+                ));
             }
-            .into(),
-        )),
+
+            #[cfg(feature = "telegram-call")]
+            {
+                let credentials = crate::telegram_account::Credentials::from_env(
+                    api_id_env,
+                    api_hash_env,
+                    session_file,
+                )
+                .map_err(SinkError::Protocol)?;
+
+                let settings = crate::sink::voice::telegram_call::TelegramCallSettings {
+                    chat_id: chat_id.clone(),
+                    api_id: credentials.api_id,
+                    api_hash: credentials.api_hash,
+                    session_file: credentials.session_file,
+                    create_if_missing: *create_if_missing,
+                };
+
+                Ok(Box::new(
+                    crate::sink::voice::telegram_call::TelegramCallSink::new(id, settings)?,
+                ))
+            }
+
+            #[cfg(not(feature = "telegram-call"))]
+            {
+                let _ = (
+                    chat_id,
+                    api_id_env,
+                    api_hash_env,
+                    session_file,
+                    create_if_missing,
+                );
+                Err(SinkError::Unavailable(
+                    "эта сборка собрана без функции трансляции в голосовой чат: \
+                     нужна сборка с --features telegram-call"
+                        .into(),
+                ))
+            }
+        }
     }
 }
 
@@ -159,6 +204,35 @@ mod tests {
             max_sends_per_minute: 20,
             edit_interval_ms: 1000,
         }
+    }
+
+    /// Голосовой чат без файла сессии: сборка приёмника обязана сказать, что
+    /// сначала нужно войти аккаунтом, а не падать в глубине звонка.
+    #[cfg(feature = "telegram-call")]
+    #[test]
+    fn a_voice_chat_without_a_session_asks_for_the_login() {
+        let cfg = VoiceSinkConfig::TelegramCall {
+            enabled: true,
+            chat_id: "@mtl_fest_en_translate".into(),
+            api_id_env: "AI_TRANSLATOR_TEST_APP_ID".into(),
+            api_hash_env: "AI_TRANSLATOR_TEST_APP_HASH".into(),
+            session_file: "/nonexistent/ai-translator-test.session".into(),
+            create_if_missing: true,
+        };
+
+        // SAFETY: the test owns these names and reads them right here.
+        unsafe {
+            std::env::set_var("AI_TRANSLATOR_TEST_APP_ID", "12345");
+            std::env::set_var("AI_TRANSLATOR_TEST_APP_HASH", "0123456789abcdef");
+        }
+
+        let err = match build_voice_sink("voice-1", &cfg) {
+            Ok(_) => panic!("приёмник собрался без файла сессии"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(err.contains("telegram-login"), "{err}");
+        assert!(err.contains("сессии"), "{err}");
     }
 
     #[test]
