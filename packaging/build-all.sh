@@ -21,9 +21,6 @@ DMG_IMAGE=ai-translator-dmg-builder:24.04
 echo "== ai-translator $VERSION =="
 test -n "$VERSION"
 
-rm -rf dist build/linux build/macos
-mkdir -p dist build/cargo-registry
-
 if ! docker image inspect "$LINUX_IMAGE" >/dev/null 2>&1; then
   echo "-- building $LINUX_IMAGE (once, a few minutes)"
   docker build -t "$LINUX_IMAGE" -f packaging/Dockerfile.linux packaging
@@ -34,6 +31,15 @@ if [ -z "$(docker run --rm -v "$ROOT:/probe" "$LINUX_IMAGE" ls -A /probe 2>/dev/
   echo "docker cannot see $ROOT: the daemon and this shell do not share the tree" >&2
   exit 1
 fi
+
+# A killed run leaves its directories owned by root; take them back before the
+# cleanup, otherwise the next run cannot remove them.
+docker run --rm -v "$ROOT:/mnt" "$LINUX_IMAGE" \
+  chown -R "$(id -u):$(id -g)" /mnt/dist /mnt/build >/dev/null 2>&1 || true
+
+rm -rf dist build/linux build/macos
+mkdir -p dist build/cargo-registry
+
 if ! docker image inspect "$DMG_IMAGE" >/dev/null 2>&1; then
   echo "-- building $DMG_IMAGE (once, a couple of minutes)"
   docker build -t "$DMG_IMAGE" -f packaging/Dockerfile.dmg packaging
