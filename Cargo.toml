@@ -17,7 +17,7 @@ default = []
 # Linux x86_64, Linux arm64 and macOS arm64. Every other target is built without
 # the feature, keeps the pure-Rust dependency set, and rejects the sink in the
 # configuration with an explanation instead of failing at run time.
-telegram-call = []
+telegram-call = ["dep:ntgcalls"]
 
 [dependencies]
 transono = { path = "../transono" }
@@ -43,6 +43,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # HTTP client of the Telegram sink. rustls instead of the platform TLS stack:
 # the release binaries are built in a container, and rustls needs no OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Media engine of the Telegram voice-chat sink: a native WebRTC/DTLS-SRTP library,
+# hence optional and reachable only through the `telegram-call` feature. The
+# library itself is fetched per target by packaging/fetch-ntgcalls.sh.
+ntgcalls = { version = "3.0.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
