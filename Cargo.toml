@@ -13,7 +13,7 @@ categories = ["multimedia::audio", "api-bindings"]
 [dependencies]
 transono = { path = "../transono" }
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "io-std", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-std", "io-util"] }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }

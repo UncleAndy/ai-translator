@@ -69,6 +69,27 @@ pub enum LineState {
     Failed,
 }
 
+impl LineState {
+    /// Machine-readable name of the state, as used in external protocols.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ai_translator::bus::LineState;
+    ///
+    /// assert_eq!(LineState::Running.as_str(), "running");
+    /// ```
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LineState::Created => "created",
+            LineState::Starting => "starting",
+            LineState::Running => "running",
+            LineState::Stopped => "stopped",
+            LineState::Failed => "failed",
+        }
+    }
+}
+
 /// A normalized translation event.
 #[derive(Debug, Clone)]
 pub enum TranslationEvent {

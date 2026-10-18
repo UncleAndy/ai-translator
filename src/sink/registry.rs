@@ -109,7 +109,7 @@ mod tests {
     fn builds_every_configured_text_sink() {
         let cases = [
             ("console", console()),
-            ("screen", websocket("0.0.0.0:8642")),
+            ("screen", websocket("127.0.0.1:0")),
             (
                 "file",
                 transcript("/tmp/ai-translator-test.txt", TranscriptFormat::Txt),
