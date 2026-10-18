@@ -40,7 +40,7 @@ nix shell nixpkgs#nodejs -c node web/test/page.mjs | tail -2
 | Проект | База | Что обязано сохраниться |
 |---|---|---|
 | `transono` | **117 + 6 = 123 теста, 0 провалов**; сборка бинарников проходит | сборка и тесты; число тестов не уменьшилось. Под Linux бинарники собираются как раньше; в кросс-проверку под darwin они не входят — там проверяется только библиотека |
-| `ai-translator` | **104 модульных + 3 интеграционных + 3 doctest**, `fmt` и `clippy -D warnings` чисто | всё перечисленное |
+| `ai-translator` | **109 модульных + 3 интеграционных + 3 doctest** (104 + 5 у команды `devices`), `fmt` и `clippy -D warnings` чисто | всё перечисленное |
 | Страница | 28 проверок, «ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ» | то же |
 
 ## 0.2. Что в `transono` уже не чисто (не наша вина и не наша задача)
@@ -331,7 +331,15 @@ git -c user.name="Andrey Velikoredchanin" -c user.email="andy@uncleandyv.com" \
 
 ---
 
-### Задача 4. `transono`: бинарники под macOS
+### Задача 4. `transono`: бинарники под macOS — **выполнено 18 октября 2026, коммит `79ba8ae`**
+
+**Шаг 1 (Linux, здесь):** `cargo build --bins` проходит; `src/bin/transono.rs` платформенно-нейтрален (grep по `pipewire|/dev/snd|libc::` пуст). Вся Linux-специфика — в `src/bin/transonovirt.rs`: он напрямую грузит модули PipeWire (`pw_context_load_module`), то есть Linux-only по природе.
+
+**Шаг 2 (darwin, проверено кросс-сборкой, а не отложено до Mac):** `cargo build --bins --target aarch64-apple-darwin` **падал** — 6 ошибок (`cannot find module or crate pipewire`, `unresolved import transono::ctl::pipewire`). Закрыто в `transono`: импорты, `Cli`, три вспомогательные функции и `main` — под `#[cfg(target_os = "linux")]`, а для остальных платформ добавлен свой `main`, который печатает «transonovirt manages PipeWire virtual audio devices and exists on Linux only» и выходит с кодом 1.
+
+**Проверено после правки:** под darwin собираются **оба** бинарника — `transono` и `transonovirt`, оба `Mach-O 64-bit arm64 executable`; под Linux `cargo build --bins` и 123 теста как были, лишних предупреждений нет.
+
+**Две поправки к плану:** предлагалось закрыть файл через `#[cfg(unix)]` — macOS тоже unix, это ничего бы не дало, нужно именно `target_os = "linux"`; и атрибут `#![cfg(...)]` на весь файл не годится — бинарник остался бы без `main`, и cargo выдал бы «main function not found».
 
 **Цель:** убедиться, что `src/bin/transono.rs` и `src/bin/transonovirt.rs` не тянут Linux-специфику сверх уже закрытой.
 
@@ -490,7 +498,9 @@ nix develop --command bash -c 'cargo run -q -- devices'
 
 ---
 
-### Задача 8. Голосовой приёмник на macOS
+### Задача 8. Голосовой приёмник на macOS — **выполнено 18 октября 2026, коммит `743dcb9`**
+
+Кода не потребовалось: честная недоступность приёмника — правильное поведение на всех платформах. Записано: ADR-002 в `docs/decisions.md` (на macOS виртуальное устройство — сторонний драйвер BlackHole/Loopback, который ставит пользователь; реализация — Этап 4 поверх `transono::ctl::Backend`) и абзац в README в разделе Sinks. Регрессия зелёная.
 
 **Файл:** `src/sink/voice/virtual_sink.rs` (сейчас заглушка, возвращающая `SinkError::Unavailable`)
 
@@ -501,7 +511,9 @@ nix develop --command bash -c 'cargo run -q -- devices'
 
 ---
 
-### Задача 9. Разрешение на микрофон (TCC)
+### Задача 9. Разрешение на микрофон (TCC) — **выполнено 18 октября 2026, коммит `bf7751d`**
+
+Раздел «Microphone permission on macOS» в README: разрешение выдаётся **терминалу**, из которого запущена команда, а не бинарнику; принятый запрос — и `run` работает; если запрос закрыли — System Settings → Privacy & Security → Microphone либо `tccutil reset Microphone` (упомянуто как способ перезапросить, не выполнялось); для будущего `.app` — `NSMicrophoneUsageDescription` в `Info.plist` плюс подпись и нотаризация, это Этап 4.
 
 **Цель:** описать поведение, а не бороться с ним.
 
@@ -513,7 +525,9 @@ nix develop --command bash -c 'cargo run -q -- devices'
 
 ---
 
-### Задача 10. Документация и правила
+### Задача 10. Документация и правила — **выполнено 18 октября 2026, коммит `d6abefa`**
+
+README: раздел «Platforms» — Linux (основная, Nix-флейк, PipeWire/ALSA через `transono`, виртуальные устройства через его PipeWire-модуль), macOS (сборка через Xcode CLT и rustup без Nix, звук через CoreAudio/cpal, PipeWire-модуль не компилируется, голосовой приёмник недоступен, разрешение спрашивается у терминала), Windows — не поддерживается (бэкенд `ctl` там незавершённая заглушка). `AGENTS.md`: раздел «Платформы» — платформенный код только через `cfg` и target-секции, Linux-путь не ослаблять, Linux-only пакеты не должны попадать в darwin-граф, после каждой такой правки — прогон «Сборка и проверки» плюс проверка сборки под darwin.
 
 **Файлы:** `README.md` (англ.), `AGENTS.md`
 
