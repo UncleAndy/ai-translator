@@ -688,6 +688,9 @@ fn disabled_sinks_are_not_validated() {
         [core]
         target_lang = "ru"
         [[sink.text]]
+        type = "console"
+        enabled = true
+        [[sink.text]]
         type = "webhook"
         enabled = false
         url = "not-a-url"
@@ -720,6 +723,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoreConfig {
     /// Идентификатор провайдера, например `openai/translation`.
+    #[serde(default = "default_provider")]
     pub provider: String,
     /// Исходный язык (`auto` — определяет провайдер).
     #[serde(default = "default_source_lang")]
@@ -871,10 +875,10 @@ impl Config {
                         if body_template.is_empty() {
                             problems.push(ConfigProblem::Invalid { field: "body_template".into(), reason: "пустой шаблон".into() });
                         }
-                        if let Some(var) = token_env {
-                            if std::env::var(var).is_err() {
-                                problems.push(ConfigProblem::MissingEnv(var.clone()));
-                            }
+                        if let Some(var) = token_env
+                            && std::env::var(var).is_err()
+                        {
+                            problems.push(ConfigProblem::MissingEnv(var.clone()));
                         }
                     }
                     continue;
@@ -911,7 +915,7 @@ impl Config {
 }
 ```
 
-Вспомогательные функции: `fn yes() -> bool { true }`, `fn default_source_lang() -> String { "auto".into() }`, `fn default_device() -> String { "default".into() }`, `fn default_bind() -> String { "0.0.0.0:8642".into() }`.
+Вспомогательные функции: `fn yes() -> bool { true }`, `fn default_provider() -> String { "openai/translation".into() }`, `fn default_source_lang() -> String { "auto".into() }`, `fn default_device() -> String { "default".into() }`, `fn default_bind() -> String { "0.0.0.0:8642".into() }`. Дополнительно к модели: методы `TextSinkConfig::enabled()` / `kind()`, `VoiceSinkConfig::enabled()` / `kind()` и `Config::enabled_sinks()`.
 
 **Шаг 4.** `cargo test --lib` → тесты конфигурации проходят.
 
