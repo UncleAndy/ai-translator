@@ -7,9 +7,19 @@
 
 #![warn(missing_docs)]
 
+/// Application assembly: sources → core → bus → sinks.
+pub mod app;
 /// Translation event bus and the event model.
 pub mod bus;
 /// Application configuration and its validation.
 pub mod config;
+/// Glue between transono sessions and the translation event bus.
+pub mod core_glue;
 /// Result sinks: text and voice.
 pub mod sink;
+/// Sources of speech and text.
+pub mod source;
+/// Sink supervisor: starting, isolating and restarting sinks.
+pub mod supervisor;
+/// Optional speech synthesis (text → audio).
+pub mod tts;
