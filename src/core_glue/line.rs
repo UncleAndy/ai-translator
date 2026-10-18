@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use transono::core::session_event::SessionEvent;
 
 use crate::bus::{EventBus, TranslationEvent};
@@ -23,6 +23,8 @@ pub struct EventBridge {
     bus: EventBus,
     events: mpsc::UnboundedReceiver<SessionEvent>,
     period: Duration,
+    stop_tx: watch::Sender<bool>,
+    stop_rx: watch::Receiver<bool>,
 }
 
 impl EventBridge {
@@ -36,12 +38,15 @@ impl EventBridge {
         events: mpsc::UnboundedReceiver<SessionEvent>,
     ) -> Self {
         let period = (adapter.gap() / 4).max(MIN_PERIOD);
+        let (stop_tx, stop_rx) = watch::channel(false);
 
         Self {
             adapter,
             bus,
             events,
             period,
+            stop_tx,
+            stop_rx,
         }
     }
 
@@ -50,15 +55,24 @@ impl EventBridge {
         self.period
     }
 
-    /// Feed the bus until the session event channel is closed.
+    /// Handle that stops the bridge: it flushes the open phrase and returns.
     ///
-    /// When the channel closes, the phrase in progress is flushed: the session
-    /// is over, so waiting out the pause would only lose the last phrase.
+    /// Needed because the translation line keeps its event sender alive, so
+    /// closing the channel is not always enough to end the bridge.
+    pub fn stopper(&self) -> watch::Sender<bool> {
+        self.stop_tx.clone()
+    }
+
+    /// Feed the bus until the session ends or the bridge is stopped.
+    ///
+    /// Either way the phrase in progress is flushed: the session is over, so
+    /// waiting out the pause would only lose the last phrase.
     pub async fn run(mut self) {
         let mut ticker = tokio::time::interval(self.period);
 
         loop {
             tokio::select! {
+                _ = self.stop_rx.changed() => break,
                 event = self.events.recv() => match event {
                     Some(event) => {
                         let now = Instant::now();
@@ -162,6 +176,34 @@ mod tests {
         assert_eq!(closed.text(), Some("Незаконченная"));
 
         task.await.expect("мост завершился");
+    }
+
+    #[tokio::test]
+    async fn bridge_stops_on_signal_and_flushes() {
+        let bus = EventBus::new();
+        let mut subscriber = bus.subscribe("test", 32);
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Пауза длиннее теста: закрыть фразу может только остановка моста.
+        let bridge = EventBridge::new(adapter(Duration::from_secs(30)), bus.clone(), rx);
+        let stopper = bridge.stopper();
+        let task = tokio::spawn(bridge.run());
+
+        tx.send(SessionEvent::Text("Незаконченная".into()))
+            .expect("событие отправлено");
+        assert!(!recv(&mut subscriber).await.is_final());
+
+        // Канал сессии остаётся открытым: линия держит отправителя у себя.
+        stopper.send(true).expect("сигнал остановки доставлен");
+
+        let closed = recv(&mut subscriber).await;
+        assert!(closed.is_final(), "остановка закрывает фразу");
+        assert_eq!(closed.text(), Some("Незаконченная"));
+
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("мост завершился по сигналу")
+            .expect("мост не упал");
     }
 
     #[tokio::test]
