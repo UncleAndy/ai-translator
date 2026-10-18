@@ -66,3 +66,5 @@ rpassword = { version = "7", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The audio spec of the probe comes from the same crate transono uses.
+symphonia = "0.6"

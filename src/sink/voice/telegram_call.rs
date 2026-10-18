@@ -256,6 +256,10 @@ impl VoiceSink for TelegramCallSink {
 
     async fn on_audio(&mut self, _line: LineId, audio: &Audio) -> Result<()> {
         if self.task.is_none() {
+            tracing::info!(
+                "первый звук у приёмника: вхожу в звонок {}",
+                self.settings.chat_id
+            );
             self.join().await?;
         }
 
@@ -488,6 +492,8 @@ async fn enter_call(
         .await
         .map_err(|e| format!("движок не создал параметры звонка: {e}"))?;
 
+    tracing::info!("движок: параметры звонка получены, вхожу в звонок");
+
     let answer = client
         .invoke(&tl::functions::phone::JoinGroupCall {
             muted: false,
@@ -502,6 +508,8 @@ async fn enter_call(
         .await
         .map_err(|e| format!("вход в звонок не выполнен: {e}"))?;
 
+    tracing::info!("вход в звонок: ответ Telegram получен");
+
     let remote = connection_params(&answer)
         .ok_or_else(|| "Telegram не прислал параметры соединения звонка".to_string())?;
 
@@ -509,6 +517,8 @@ async fn enter_call(
         .connect(call_id, &remote, false)
         .await
         .map_err(|e| format!("движок не подключился к звонку: {e}"))?;
+
+    tracing::info!("движок: соединение установлено");
 
     engine
         .set_stream_sources(
@@ -529,6 +539,8 @@ async fn enter_call(
         )
         .await
         .map_err(|e| format!("движок не принял источник звука: {e}"))?;
+
+    tracing::info!("движок: источник звука принят");
 
     tracing::info!("трансляция идёт в {}", settings.chat_id);
 
