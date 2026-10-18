@@ -954,6 +954,9 @@ pub enum SinkError {
     /// Ошибка протокола.
     #[error("ошибка протокола: {0}")]
     Protocol(String),
+    /// Реестру неизвестен такой тип приёмника.
+    #[error("неизвестный тип приёмника: {0}")]
+    UnknownType(String),
     /// Ошибка ввода-вывода.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -989,7 +992,7 @@ pub trait VoiceSink: Send {
 }
 ```
 
-**Шаг 2. Тест реестра** в `src/sink/registry.rs`:
+**Шаг 2. Тесты реестра** в `src/sink/registry.rs`:
 
 ```rust
 #[test]
@@ -1000,18 +1003,32 @@ fn builds_console_sink_by_type_name() {
 }
 
 #[test]
-fn build_fails_for_unknown_type() {
-    // Проверка через конфигурацию: serde отвергает неизвестный тег,
-    // поэтому реестр отвечает только за известные типы.
-    let cfg = TextSinkConfig::Webhook {
-        enabled: true,
-        url: "http://127.0.0.1:9/h".into(),
-        body_template: "{\"text\":\"{text}\"}".into(),
-        token_env: None,
-    };
-    assert!(build_text_sink("hook", &cfg).is_ok());
+fn builds_every_configured_text_sink() {
+    // console, websocket, transcript, webhook — каждый строится по своему типу
+}
+
+#[test]
+fn builds_voice_sink_by_type_name() { /* virtual_sink */ }
+
+#[test]
+fn unusable_listen_address_is_reported() {
+    let err = build_text_sink("screen", &websocket("не-адрес"))
+        .err().expect("ожидалась ошибка сборки");
+    assert!(matches!(err, SinkError::Protocol(_)));
+}
+
+#[test]
+fn unknown_type_is_named_in_the_error() {
+    assert_eq!(unknown_type("telegramm").to_string(), "неизвестный тип приёмника: telegramm");
+}
+
+#[tokio::test]
+async fn not_yet_implemented_sinks_report_unavailability() {
+    // заглушка (webhook) обязана вернуть SinkError::Unavailable, а не молчать
 }
 ```
+
+Конструкторы приёмников проверяют свои параметры (`bind`, `url`, `body_template`, `path`, `device`, громкость), поэтому сборка приёмника может отказать с настоящей ошибкой, а не с паникой позже. Все приёмники выводят `#[derive(Debug)]`: тесты на отказ используют `unwrap_err`/`unwrap`.
 
 **Шаг 3. Реализация реестра:**
 
@@ -1046,7 +1063,7 @@ pub fn build_voice_sink(id: &str, cfg: &VoiceSinkConfig) -> Result<Box<dyn Voice
 
 /// Ошибка сборки приёмника с указанием имени типа.
 pub fn unknown_type(kind: &str) -> SinkError {
-    SinkError::Protocol(format!("неизвестный тип приёмника: {kind}"))
+    SinkError::UnknownType(kind.to_string())
 }
 ```
 
@@ -1086,6 +1103,7 @@ use crate::bus::TranslationEvent;
 use crate::sink::{Result, TextSink};
 
 /// Выводит перевод в стандартный вывод.
+#[derive(Debug)]
 pub struct ConsoleSink {
     id: String,
     phrases: usize,
