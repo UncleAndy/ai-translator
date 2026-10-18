@@ -132,6 +132,32 @@ struct SinkHandle {
     task: Option<JoinHandle<()>>,
 }
 
+/// Sink bookkeeping shared between the supervisor and the sink task.
+#[derive(Clone)]
+struct SinkSlot {
+    state: Arc<Mutex<SinkState>>,
+    starts: Arc<AtomicU32>,
+}
+
+impl SinkSlot {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(SinkState::Unknown)),
+            starts: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    /// Record that the sink is running.
+    fn set(&self, state: SinkState) {
+        *self.state.lock().expect("состояние приёмника повреждено") = state;
+    }
+
+    /// Record one more successful start.
+    fn count_start(&self) {
+        self.starts.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Runs the enabled sinks and keeps them alive.
 pub struct Supervisor {
     bus: EventBus,
@@ -169,7 +195,24 @@ impl Supervisor {
     where
         F: Fn() -> Result<Box<dyn TextSink>> + Send + Sync + 'static,
     {
-        self.spawn_kind(id, Arc::new(move || factory().map(SinkKind::Text)));
+        self.spawn_kind(id, None, Arc::new(move || factory().map(SinkKind::Text)));
+    }
+
+    /// Start a text sink that is already built.
+    ///
+    /// The instance is used for the first run and `factory` only for restarts.
+    /// Building a sink can take a resource — a listening socket, an open file —
+    /// and taking it twice would be wrong: the caller builds the sink once and
+    /// reports a failure itself, before anything is running.
+    pub fn spawn_ready<F>(&self, id: &str, first: Box<dyn TextSink>, factory: F)
+    where
+        F: Fn() -> Result<Box<dyn TextSink>> + Send + Sync + 'static,
+    {
+        self.spawn_kind(
+            id,
+            Some(SinkKind::Text(first)),
+            Arc::new(move || factory().map(SinkKind::Text)),
+        );
     }
 
     /// Start a voice sink built by `factory`.
@@ -177,7 +220,19 @@ impl Supervisor {
     where
         F: Fn() -> Result<Box<dyn VoiceSink>> + Send + Sync + 'static,
     {
-        self.spawn_kind(id, Arc::new(move || factory().map(SinkKind::Voice)));
+        self.spawn_kind(id, None, Arc::new(move || factory().map(SinkKind::Voice)));
+    }
+
+    /// Start a voice sink that is already built.
+    pub fn spawn_voice_ready<F>(&self, id: &str, first: Box<dyn VoiceSink>, factory: F)
+    where
+        F: Fn() -> Result<Box<dyn VoiceSink>> + Send + Sync + 'static,
+    {
+        self.spawn_kind(
+            id,
+            Some(SinkKind::Voice(first)),
+            Arc::new(move || factory().map(SinkKind::Voice)),
+        );
     }
 
     /// Deliver an event to every sink.
@@ -245,19 +300,18 @@ impl Supervisor {
     }
 
     /// Create the subscriber and the task of one sink.
-    fn spawn_kind(&self, id: &str, factory: SinkFactory) {
+    fn spawn_kind(&self, id: &str, first: Option<SinkKind>, factory: SinkFactory) {
         let subscriber = self.bus.subscribe(id, self.capacity);
-        let state = Arc::new(Mutex::new(SinkState::Unknown));
-        let starts = Arc::new(AtomicU32::new(0));
+        let slot = SinkSlot::new();
         let stop = self.stop_tx.subscribe();
 
         let task = tokio::spawn(run_sink(
             id.to_string(),
+            first,
             factory,
             subscriber,
             self.policy,
-            state.clone(),
-            starts.clone(),
+            slot.clone(),
             stop,
         ));
 
@@ -267,8 +321,8 @@ impl Supervisor {
             .insert(
                 id.to_string(),
                 SinkHandle {
-                    state,
-                    starts,
+                    state: slot.state,
+                    starts: slot.starts,
                     task: Some(task),
                 },
             );
@@ -278,20 +332,26 @@ impl Supervisor {
 /// Feed one sink until it fails for good or is stopped.
 async fn run_sink(
     id: String,
+    first: Option<SinkKind>,
     factory: SinkFactory,
     mut subscriber: Subscriber,
     policy: RestartPolicy,
-    state: Arc<Mutex<SinkState>>,
-    starts: Arc<AtomicU32>,
+    slot: SinkSlot,
     mut stop: watch::Receiver<bool>,
 ) {
     let mut attempt = 0;
+    let mut first = first;
 
     loop {
-        let (outcome, handled) = match factory() {
+        let built = match first.take() {
+            Some(sink) => Ok(sink),
+            None => factory(),
+        };
+
+        let (outcome, handled) = match built {
             Ok(mut sink) => {
-                starts.fetch_add(1, Ordering::Relaxed);
-                *state.lock().expect("состояние приёмника повреждено") = SinkState::Running;
+                slot.count_start();
+                slot.set(SinkState::Running);
 
                 // Хотя бы одно обработанное событие означает, что приёмник ожил:
                 // тогда счётчик попыток считает только подряд идущие отказы.
@@ -324,7 +384,7 @@ async fn run_sink(
 
         match outcome {
             Ok(()) => {
-                *state.lock().expect("состояние приёмника повреждено") = SinkState::Stopped;
+                slot.set(SinkState::Stopped);
                 return;
             }
             Err(reason) => {
@@ -338,13 +398,12 @@ async fn run_sink(
 
                 if attempt >= policy.attempts {
                     tracing::error!(sink = %id, "приёмник отказал окончательно: {reason}");
-                    *state.lock().expect("состояние приёмника повреждено") =
-                        SinkState::Error(reason);
+                    slot.set(SinkState::Error(reason));
                     return;
                 }
 
                 tracing::warn!(sink = %id, "приёмник перезапускается: {reason}");
-                attempt = restart(&id, &state, policy, attempt).await;
+                attempt = restart(&id, &slot, policy, attempt).await;
             }
         }
     }
@@ -365,14 +424,9 @@ async fn drain(sink: &mut SinkKind, subscriber: &mut Subscriber) {
 }
 
 /// Wait out the restart delay, reporting the attempt in progress.
-async fn restart(
-    id: &str,
-    state: &Arc<Mutex<SinkState>>,
-    policy: RestartPolicy,
-    attempt: u32,
-) -> u32 {
+async fn restart(id: &str, slot: &SinkSlot, policy: RestartPolicy, attempt: u32) -> u32 {
     let attempt = attempt + 1;
-    *state.lock().expect("состояние приёмника повреждено") = SinkState::Restarting { attempt };
+    slot.set(SinkState::Restarting { attempt });
     tracing::debug!(sink = %id, attempt, "перезапуск приёмника");
     tokio::time::sleep(policy.delay).await;
     attempt

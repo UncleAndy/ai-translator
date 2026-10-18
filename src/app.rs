@@ -67,9 +67,10 @@ impl App {
 
     /// Assemble the application from a configuration.
     ///
-    /// Sinks are built once here as a check and then built again by the
-    /// supervisor for the actual run: an address already in use or an
-    /// unwritable transcript path must be visible before the run starts.
+    /// Every enabled sink is built here and handed to the supervisor as its
+    /// first instance: a sink takes a resource when it is built — a listening
+    /// socket, an open file — and building it twice would take that resource
+    /// twice. A failure to build is reported before anything starts.
     pub fn build(cfg: &Config) -> Result<Self, AppError> {
         let problems = cfg.validate();
         if !problems.is_empty() {
@@ -93,26 +94,26 @@ impl App {
 
         for sink in cfg.sink.text.iter().filter(|sink| sink.enabled()) {
             let id = next_id(&mut ids, sink.kind());
-            build_text_sink(&id, sink).map_err(|error| AppError::Sink {
+            let ready = build_text_sink(&id, sink).map_err(|error| AppError::Sink {
                 id: id.clone(),
                 error,
             })?;
 
             let sink = sink.clone();
             let factory_id = id.clone();
-            supervisor.spawn(&id, move || build_text_sink(&factory_id, &sink));
+            supervisor.spawn_ready(&id, ready, move || build_text_sink(&factory_id, &sink));
         }
 
         for sink in cfg.sink.voice.iter().filter(|sink| sink.enabled()) {
             let id = next_id(&mut ids, sink.kind());
-            build_voice_sink(&id, sink).map_err(|error| AppError::Sink {
+            let ready = build_voice_sink(&id, sink).map_err(|error| AppError::Sink {
                 id: id.clone(),
                 error,
             })?;
 
             let sink = sink.clone();
             let factory_id = id.clone();
-            supervisor.spawn_voice(&id, move || build_voice_sink(&factory_id, &sink));
+            supervisor.spawn_voice_ready(&id, ready, move || build_voice_sink(&factory_id, &sink));
         }
 
         Ok(Self {

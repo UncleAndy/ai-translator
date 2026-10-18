@@ -1,0 +1,29 @@
+# Конфигурация для разработки: перевод с микрофона, вывод в консоль,
+# страница большого экрана и транскрипт рядом с проектом.
+#
+# Ключ провайдера берётся из переменной окружения OPENAI_API_KEY или из .env.
+
+[core]
+provider = "openai/translation"
+source_lang = "auto"
+target_lang = "ru"
+input_device = "default"
+
+# Текущий перевод в терминале.
+[[sink.text]]
+type = "console"
+enabled = true
+
+# Страница большого экрана: откройте http://127.0.0.1:8642/
+[[sink.text]]
+type = "websocket"
+enabled = true
+bind = "0.0.0.0:8643"
+
+# Транскрипт рядом с проектом: двуязычные субтитры.
+[[sink.text]]
+type = "transcript"
+enabled = true
+path = "transcript.srt"
+format = "srt"
+bilingual = true

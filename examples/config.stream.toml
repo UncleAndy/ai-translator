@@ -1,0 +1,40 @@
+# Конфигурация для трансляции: тот же перевод уходит сразу нескольким
+# приёмникам — на большой экран, в титры-файл, во внешнюю систему и в
+# виртуальное звуковое устройство.
+
+[core]
+provider = "openai/translation"
+source_lang = "auto"
+target_lang = "ru"
+input_device = "default"
+
+# Экран в студии: страница открывается по адресу http://<адрес>:8642/
+[[sink.text]]
+type = "websocket"
+enabled = true
+bind = "0.0.0.0:8643"
+
+# Двуязычные субтитры для монтажа.
+[[sink.text]]
+type = "transcript"
+enabled = true
+path = "stream.srt"
+format = "srt"
+bilingual = true
+
+# Внешняя система (графика, чат, лог): включите, когда приёмник будет готов.
+# На Этапе 1 приёмник вебхука отвечает «внешний сервис недоступен».
+[[sink.text]]
+type = "webhook"
+enabled = false
+url = "http://127.0.0.1:8080/translate"
+body_template = '{"text": "{text}", "final": {is_final}, "lang": "{target_lang}"}'
+token_env = "WEBHOOK_TOKEN"
+
+# Виртуальное звуковое устройство: переведённая речь уходит в него, а не в
+# колонки, чтобы её мог взять другой процесс. Заготовка Этапа 2.
+[[sink.voice]]
+type = "virtual_sink"
+enabled = false
+device = "ai-translator"
+monitor_original = 0.0

@@ -1,0 +1,26 @@
+# Конфигурация без сети: только консоль и файл.
+#
+# Нужна для режима script — прогон заданного текста через шину без микрофона,
+# провайдера и ключа:
+#
+#   cargo run -- script --config examples/config.offline.toml --text "Привет, мир."
+#
+# Провайдер в этой конфигурации не используется, но поле остаётся: так
+# конфигурация не отличается от рабочей, и её можно проверить командой check.
+
+[core]
+provider = "openai/translation"
+source_lang = "auto"
+target_lang = "ru"
+input_device = "default"
+
+[[sink.text]]
+type = "console"
+enabled = true
+
+[[sink.text]]
+type = "transcript"
+enabled = true
+path = "offline.jsonl"
+format = "jsonl"
+bilingual = true
