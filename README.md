@@ -86,6 +86,11 @@ sink is never started, and a sink that cannot deliver reports an error, which th
 records and acts on. A sink that fails is restarted with a bounded number of attempts and
 does not affect the other sinks.
 
+On macOS a virtual audio device is not part of the system audio stack but a third-party
+driver the user installs (BlackHole, Loopback); the application never installs a driver
+itself. The voice sink therefore stays unavailable there until stage 4, which is the honest
+answer rather than a silent no-op — see `docs/decisions.md`, ADR-002.
+
 Translated speech comes from the AI provider itself as part of the same session that produces
 the translated text. Speech synthesis (TTS) is an optional additional source of audio, used
 only when a provider or a source does not produce speech of its own.
@@ -134,7 +139,9 @@ Ready-made examples live in `examples/`: `config.dev.toml` for development,
 
 ## Requirements
 
-- Nix with flakes (development shell is provided)
+- Nix with flakes (the development shell is provided **for Linux**)
+- On macOS: Xcode Command Line Tools and a rustup toolchain — the Nix shell is not used
+  there, see *Building on macOS* below
 - A reachable AI provider account for translation
 - External infrastructure for sinks that need it (an audio server, a browser)
 
@@ -169,6 +176,25 @@ nix develop --command bash -c 'cargo test'                        # unit, pipeli
 nix develop --command bash -c 'cargo clippy --all-targets -- -D warnings'
 nix develop --command bash -c 'cargo fmt --check'
 ```
+
+### Building on macOS
+
+The Nix development shell targets Linux: it provides PipeWire, ALSA and glibc, which exist
+there only. On macOS the audio backend is CoreAudio — a system framework — so a plain
+toolchain is enough, with no audio server and no Nix:
+
+```bash
+xcode-select --install            # once: compiler and system headers
+cd ../transono && cargo build     # the library ai-translator depends on
+cd ../ai-translator && cargo build
+```
+
+`transono` keeps its PipeWire dependencies, and the `transonovirt` binary that drives them,
+on Linux only; on macOS the library builds without them. The CI job `macos` builds and tests
+both repositories on a macOS runner, so this path is checked on every push.
+
+Building for macOS *from* Linux is also possible, with osxcross in a container — see
+`docs/macos-cross-build.md`.
 
 ## Project layout
 
@@ -218,6 +244,7 @@ configuration and the command-line interface.
 - `docs/TZ_ai-translator_v0.1.md` — technical specification (Russian)
 - `docs/decisions.md` — decisions that shape the project (Russian)
 - `docs/methods.txt` — source material on delivery protocols (Russian)
+- `docs/macos-cross-build.md` — building for macOS from Linux with osxcross (Russian)
 
 ## License
 
