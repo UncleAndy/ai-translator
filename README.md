@@ -271,7 +271,7 @@ configuration and the command-line interface.
 
 ## Releases
 
-Tagging `v*` builds the artefacts and fills a draft release on GitHub; the details are in [docs/release.md](docs/release.md). Linux binaries need glibc 2.34 or newer, `libpipewire-0.3-0` 1.0 or newer and `libasound2`; the AppImage expects the same libraries on the system, it does not bundle them. macOS needs nothing beyond the system.
+Tagging `v*` builds the artefacts and stores them, with checksums, as one `release-<tag>` artifact on the run page; the release itself is created by hand, and the workflow has read-only access (see [docs/release.md](docs/release.md)). Linux binaries need glibc 2.34 or newer, `libpipewire-0.3-0` 1.0 or newer and `libasound2`; the AppImage expects the same libraries on the system, it does not bundle them. macOS needs nothing beyond the system.
 
 Nothing is signed. On macOS the binary carries an ad-hoc signature, without which Apple Silicon will not start it at all, but Gatekeeper still treats the application as unsigned: open it once from the context menu, or run `xattr -d com.apple.quarantine ./ai-translator`.
 
