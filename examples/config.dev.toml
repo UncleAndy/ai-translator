@@ -6,7 +6,7 @@
 [core]
 provider = "openai/translation"
 source_lang = "auto"
-target_lang = "ru"
+target_lang = "en"
 input_device = "default"
 
 # Текущий перевод в терминале.
