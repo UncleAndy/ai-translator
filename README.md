@@ -88,7 +88,7 @@ Implemented on stage 1:
 | `console` | terminal output for observation and debugging |
 | `websocket` | local HTTP server plus a full-screen page for a stage display or OBS Browser Source |
 | `transcript` | recording to TXT, SRT, VTT or JSONL, optionally bilingual |
-| `telegram` | publishing the translation into the configured channel through a bot, one message per phrase, edited as the phrase grows |
+| `telegram` | publishing the translation into the configured channel through a bot, one message per phrase, edited as the phrase grows, within the limits of 20 new messages a minute and one edit a second |
 
 Declared in the configuration and reserved for the next stages:
 

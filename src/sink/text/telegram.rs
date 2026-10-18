@@ -17,17 +17,25 @@
 //! escaping. Telegram caps one message at 4096 characters, so a phrase that
 //! grows longer than that spills into the next message.
 //!
-//! Edits are throttled: Telegram counts them as messages and limits the rate, so
-//! a message is edited at most once per [`DEFAULT_EDIT_INTERVAL`], except for the
-//! revision that ends the phrase — that one is always applied. A skipped
-//! revision costs nothing: the accumulated text of the phrase arrives with the
-//! next event, and the final revision carries the whole sentence.
+//! Two limits keep the sink inside the rate Telegram allows, both taken from the
+//! configuration:
+//!
+//! * no more than `max_sends_per_minute` new messages a minute: a phrase that
+//!   would exceed it waits until the oldest message leaves the minute;
+//! * an edit of one message no more often than `edit_interval_ms`, except for the
+//!   revision that ends the phrase — that one is always applied. A skipped
+//!   revision costs nothing: the accumulated text of the phrase arrives with the
+//!   next event, and the final revision carries the whole sentence.
+//!
+//! Zero in either field removes that limit.
 //!
 //! The bot token is read once, when the sink is built: a missing variable is
 //! reported at start-up instead of failing in the middle of a run. The token is
 //! part of the request URL, so every error message passes through
 //! [`reqwest::Error::without_url`] and the token never reaches a log line.
 
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -43,7 +51,13 @@ pub const API_BASE: &str = "https://api.telegram.org";
 pub const MAX_MESSAGE_CHARS: usize = 4096;
 
 /// Shortest time between two edits of one message.
-pub const DEFAULT_EDIT_INTERVAL: Duration = Duration::from_millis(1200);
+pub const DEFAULT_EDIT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How many new messages may be posted per minute by default.
+pub const DEFAULT_SENDS_PER_MINUTE: u32 = 20;
+
+/// The window the send limit counts over.
+pub const SEND_WINDOW: Duration = Duration::from_secs(60);
 
 /// How long a rate limit is waited out before the sink gives up.
 const RETRY_AFTER_LIMIT_SECS: u64 = 30;
@@ -111,6 +125,8 @@ pub struct TelegramSettings {
     pub thread: Option<i64>,
     /// Shortest time between two edits of one message.
     pub edit_interval: Duration,
+    /// How many new messages may be posted per minute; zero means no limit.
+    pub max_sends_per_minute: u32,
 }
 
 impl TelegramSettings {
@@ -124,6 +140,99 @@ impl TelegramSettings {
             silent: false,
             thread: None,
             edit_interval: DEFAULT_EDIT_INTERVAL,
+            max_sends_per_minute: DEFAULT_SENDS_PER_MINUTE,
+        }
+    }
+}
+
+/// Sliding window over the messages posted in the last minute.
+///
+/// Telegram counts every new message against a per-chat limit, and a phrase that
+/// arrives faster than the limit would be refused. The window holds the times of
+/// the messages already posted: a send is allowed while fewer than `limit` of
+/// them are younger than [`SEND_WINDOW`], otherwise it waits for the oldest to
+/// fall out of the window.
+struct SendWindow {
+    limit: usize,
+    window: Duration,
+    slots: Mutex<VecDeque<Instant>>,
+}
+
+/// Decision of [`SendWindow::plan`].
+#[derive(Debug, PartialEq, Eq)]
+enum Slot {
+    /// Send now; the slot is taken.
+    Now,
+    /// Wait this long, then ask again.
+    Wait(Duration),
+}
+
+impl SendWindow {
+    fn new(limit: u32) -> Self {
+        Self::with_window(limit, SEND_WINDOW)
+    }
+
+    /// A window of a custom length, for tests that must not wait a minute.
+    fn with_window(limit: u32, window: Duration) -> Self {
+        Self {
+            limit: limit as usize,
+            window,
+            slots: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Take a slot if one is free at `now`.
+    fn plan(&self, now: Instant) -> Slot {
+        if self.limit == 0 {
+            return Slot::Now;
+        }
+
+        let mut slots = match self.slots.lock() {
+            Ok(slots) => slots,
+            // A poisoned window is not worth failing a translation over: let the
+            // message through and let Telegram decide.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        while let Some(oldest) = slots.front() {
+            if now.saturating_duration_since(*oldest) >= self.window {
+                slots.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if slots.len() < self.limit {
+            slots.push_back(now);
+            return Slot::Now;
+        }
+
+        let oldest = slots.front().copied().unwrap_or(now);
+        Slot::Wait(
+            self.window
+                .saturating_sub(now.saturating_duration_since(oldest)),
+        )
+    }
+
+    /// Wait until a slot is free.
+    async fn acquire(&self) {
+        let mut announced = false;
+
+        loop {
+            match self.plan(Instant::now()) {
+                Slot::Now => return,
+                Slot::Wait(wait) => {
+                    if !announced {
+                        tracing::debug!(
+                            "предел {} сообщений в минуту: ждём {} мс",
+                            self.limit,
+                            wait.as_millis()
+                        );
+                        announced = true;
+                    }
+                    tokio::time::sleep(wait.max(Duration::from_millis(10))).await;
+                }
+            }
         }
     }
 }
@@ -142,6 +251,25 @@ impl std::fmt::Debug for TelegramSettings {
     }
 }
 
+/// Everything the sink takes from the configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct TelegramSpec<'a> {
+    /// Channel to publish into: `@name` or a numeric id.
+    pub chat_id: &'a str,
+    /// Variable holding the bot token.
+    pub token_env: &'a str,
+    /// Post the source text above the translation.
+    pub bilingual: bool,
+    /// Send without a notification sound.
+    pub silent: bool,
+    /// Forum topic, when the channel is tied to a forum.
+    pub thread: Option<i64>,
+    /// New messages allowed per minute; zero removes the limit.
+    pub max_sends_per_minute: u32,
+    /// Shortest time between two edits of one message.
+    pub edit_interval: Duration,
+}
+
 /// A message carrying the phrase that is still being translated.
 struct LiveMessage {
     /// Identifier of the message in the chat.
@@ -157,6 +285,8 @@ pub struct TelegramSink {
     id: String,
     settings: TelegramSettings,
     client: reqwest::Client,
+    /// Sliding window of the messages posted in the last minute.
+    sends: SendWindow,
     live: Option<LiveMessage>,
     last_source: String,
     sent: u64,
@@ -196,10 +326,13 @@ impl TelegramSink {
             .build()
             .map_err(|e| SinkError::Unavailable(format!("не удалось создать HTTP-клиент: {e}")))?;
 
+        let sends = SendWindow::new(settings.max_sends_per_minute);
+
         Ok(Self {
             id: id.to_string(),
             settings,
             client,
+            sends,
             live: None,
             last_source: String::new(),
             sent: 0,
@@ -207,34 +340,30 @@ impl TelegramSink {
         })
     }
 
-    /// Create a sink reading the bot token from `token_env`.
+    /// Create a sink from the configuration, reading the bot token from
+    /// `spec.token_env`.
     ///
     /// # Errors
     ///
     /// Returns an error when the chat or the variable name is empty, when the
     /// variable is not set, or when the sink itself cannot be created.
-    pub fn from_env(
-        id: &str,
-        chat_id: &str,
-        token_env: &str,
-        bilingual: bool,
-        silent: bool,
-        thread: Option<i64>,
-    ) -> Result<Self> {
-        if token_env.trim().is_empty() {
+    pub fn from_spec(id: &str, spec: TelegramSpec<'_>) -> Result<Self> {
+        if spec.token_env.trim().is_empty() {
             return Err(SinkError::Protocol(
                 "пустое имя переменной с токеном бота".into(),
             ));
         }
 
-        let token = std::env::var(token_env).map_err(|_| {
-            SinkError::Protocol(format!("не задана переменная окружения {token_env}"))
+        let token = std::env::var(spec.token_env).map_err(|_| {
+            SinkError::Protocol(format!("не задана переменная окружения {}", spec.token_env))
         })?;
 
-        let mut settings = TelegramSettings::new(chat_id, &token);
-        settings.bilingual = bilingual;
-        settings.silent = silent;
-        settings.thread = thread;
+        let mut settings = TelegramSettings::new(spec.chat_id, &token);
+        settings.bilingual = spec.bilingual;
+        settings.silent = spec.silent;
+        settings.thread = spec.thread;
+        settings.max_sends_per_minute = spec.max_sends_per_minute;
+        settings.edit_interval = spec.edit_interval;
 
         Self::new(id, settings)
     }
@@ -315,7 +444,12 @@ impl TelegramSink {
     }
 
     /// Post a message and return its identifier.
+    ///
+    /// Waits for a free slot when the per-minute limit is used up: Telegram
+    /// counts new messages against it and would refuse the phrase otherwise.
     async fn send(&self, text: &str) -> Result<i64> {
+        self.sends.acquire().await;
+
         let mut body = json!({
             "chat_id": self.settings.chat_id,
             "text": text,
@@ -621,6 +755,72 @@ mod tests {
         assert_eq!(pieces, vec!["abcd", "efgh", "ij"]);
     }
 
+    #[test]
+    fn the_send_limit_lets_the_first_messages_through_and_then_waits() {
+        let window = SendWindow::new(20);
+        let start = Instant::now();
+
+        for i in 0..20 {
+            let now = start + Duration::from_millis(i * 100);
+            assert_eq!(window.plan(now), Slot::Now, "сообщение {i} проходит сразу");
+        }
+
+        match window.plan(start + Duration::from_secs(2)) {
+            Slot::Wait(wait) => assert!(
+                wait > Duration::from_secs(50) && wait <= SEND_WINDOW,
+                "двадцать первое сообщение ждёт почти всю минуту: {wait:?}"
+            ),
+            other => panic!("двадцать первое сообщение должно ждать: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_slot_frees_up_when_the_oldest_message_leaves_the_minute() {
+        let window = SendWindow::new(2);
+        let start = Instant::now();
+
+        assert_eq!(window.plan(start), Slot::Now);
+        assert_eq!(window.plan(start + Duration::from_secs(1)), Slot::Now);
+        assert!(
+            matches!(window.plan(start + Duration::from_secs(2)), Slot::Wait(_)),
+            "третье сообщение ждёт"
+        );
+        assert_eq!(
+            window.plan(start + SEND_WINDOW + Duration::from_secs(1)),
+            Slot::Now,
+            "через минуту место освободилось"
+        );
+    }
+
+    #[test]
+    fn a_zero_send_limit_does_not_hold_anything_back() {
+        let window = SendWindow::new(0);
+        let start = Instant::now();
+
+        for i in 0..100 {
+            assert_eq!(window.plan(start + Duration::from_millis(i)), Slot::Now);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_send_waits_for_the_window_to_free_a_slot() {
+        let (base, seen) = stand_in(ok).await;
+        let mut sink = sink(&base, Duration::ZERO);
+        // One message per 300 ms: short enough for a test, the same code path.
+        sink.sends = SendWindow::with_window(1, Duration::from_millis(300));
+
+        let started = Instant::now();
+        sink.on_event(&translated("первая", true)).await.unwrap();
+        sink.on_event(&translated("вторая", true)).await.unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(methods(&seen).len(), 2, "оба сообщения всё-таки ушли");
+        assert!(
+            elapsed >= Duration::from_millis(250),
+            "второе сообщение ждало окно: {elapsed:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_phrase_starts_at_once_and_grows_by_edits() {
         let (base, seen) = stand_in(ok).await;
@@ -778,13 +978,17 @@ mod tests {
 
     #[test]
     fn a_missing_variable_is_named() {
-        let err = TelegramSink::from_env(
+        let err = TelegramSink::from_spec(
             "t",
-            "-100",
-            "AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN",
-            false,
-            false,
-            None,
+            TelegramSpec {
+                chat_id: "-100",
+                token_env: "AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN",
+                bilingual: false,
+                silent: false,
+                thread: None,
+                max_sends_per_minute: DEFAULT_SENDS_PER_MINUTE,
+                edit_interval: DEFAULT_EDIT_INTERVAL,
+            },
         )
         .unwrap_err();
 

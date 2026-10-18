@@ -112,6 +112,13 @@ pub enum TextSinkConfig {
         /// Forum topic identifier, when the chat is a forum.
         #[serde(default)]
         message_thread_id: Option<i64>,
+        /// How many new messages the sink may post per minute; 0 removes the limit.
+        #[serde(default = "default_telegram_max_sends")]
+        max_sends_per_minute: u32,
+        /// Shortest time between two edits of one message, in milliseconds;
+        /// 0 sends every revision.
+        #[serde(default = "default_telegram_edit_interval_ms")]
+        edit_interval_ms: u64,
     },
     /// Send the translation over HTTP POST using a body template.
     Webhook {
@@ -411,6 +418,16 @@ fn default_device() -> String {
 
 fn default_telegram_token_env() -> String {
     "TELEGRAM_BOT_TOKEN".to_string()
+}
+
+/// Upper bound Telegram itself applies to new messages in one chat.
+fn default_telegram_max_sends() -> u32 {
+    20
+}
+
+/// One edit per second: enough for the phrase to grow visibly, mild for Telegram.
+fn default_telegram_edit_interval_ms() -> u64 {
+    1000
 }
 
 fn default_bind() -> String {
@@ -786,6 +803,33 @@ mod tests {
             text.contains("AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn telegram_limits_have_defaults() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            chat_id = "@channel"
+            token_env = "PATH"
+        "#,
+        )
+        .unwrap();
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Telegram {
+                max_sends_per_minute,
+                edit_interval_ms,
+                ..
+            } => {
+                assert_eq!(*max_sends_per_minute, 20, "двадцать сообщений в минуту");
+                assert_eq!(*edit_interval_ms, 1000, "одна правка в секунду");
+            }
+            other => panic!("ожидался приёмник Telegram, получено {other:?}"),
+        }
     }
 
     #[test]

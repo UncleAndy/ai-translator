@@ -4,8 +4,10 @@
 //! so the registry only maps the known types onto constructors. It still owns
 //! the [`unknown_type`] helper for callers that switch on a type name by hand.
 
+use std::time::Duration;
+
 use super::text::console::ConsoleSink;
-use super::text::telegram::TelegramSink;
+use super::text::telegram::{TelegramSink, TelegramSpec};
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
 use super::text::websocket::{ScreenSettings, WebsocketSink};
@@ -49,14 +51,20 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             bilingual,
             silent,
             message_thread_id,
+            max_sends_per_minute,
+            edit_interval_ms,
             ..
-        } => Ok(Box::new(TelegramSink::from_env(
+        } => Ok(Box::new(TelegramSink::from_spec(
             id,
-            chat_id,
-            token_env,
-            *bilingual,
-            *silent,
-            *message_thread_id,
+            TelegramSpec {
+                chat_id,
+                token_env,
+                bilingual: *bilingual,
+                silent: *silent,
+                thread: *message_thread_id,
+                max_sends_per_minute: *max_sends_per_minute,
+                edit_interval: Duration::from_millis(*edit_interval_ms),
+            },
         )?)),
         TextSinkConfig::Webhook {
             url,
@@ -139,6 +147,8 @@ mod tests {
             bilingual: false,
             silent: true,
             message_thread_id: None,
+            max_sends_per_minute: 20,
+            edit_interval_ms: 1000,
         }
     }
 

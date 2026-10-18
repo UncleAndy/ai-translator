@@ -85,6 +85,12 @@ token_env = "TELEGRAM_BOT_TOKEN"
 bilingual = false
 # Без звука уведомления.
 silent = false
+# Пределы скорости, в которые укладывается публикация:
+#   max_sends_per_minute — не больше 20 новых сообщений в минуту;
+#   edit_interval_ms     — не чаще одной правки сообщения в секунду.
+# 0 в любом поле снимает этот предел целиком.
+max_sends_per_minute = 20
+edit_interval_ms = 1000
 # Тема форума: id темы, если канал привязан к форуму. Обычному каналу не нужно.
 # message_thread_id = 12
 
