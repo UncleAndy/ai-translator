@@ -40,6 +40,7 @@ contents:
     dst: /usr/share/pixmaps/ai-translator.png
   - src: packaging/ai-translator.desktop
     dst: /usr/share/applications/ai-translator.desktop
+  # CALL_LIB_PLACEHOLDER
 overrides:
   rpm:
     # Fedora and friends name the same libraries differently.

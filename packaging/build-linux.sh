@@ -37,9 +37,37 @@ if [ -n "$FEATURES" ]; then
   BUILD_ARGS+=(--features "$FEATURES")
 fi
 
-cargo build "${BUILD_ARGS[@]}"
+# The voice-chat sink streams through a native media engine. It is linked as a
+# shared library and shipped beside the binary: a static copy brings its own C++
+# runtime and allocator into the process, and the rest of the program stops
+# working — even when the sink is disabled.
+CALL_LIB=""
+if [[ ",$FEATURES," == *",telegram-call,"* ]]; then
+  echo "-- voice-chat sink: fetching the media engine"
+  ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh x86_64-unknown-linux-gnu)"
+  CALL_LIB="$ENGINE_DIR/lib/libntgcalls.so"
+  test -f "$CALL_LIB"
+
+  # The rpath looks first next to the binary (tarball, AppImage) and then in the
+  # library directory of a distribution package.
+  NTGCALLS_DYLIB=1 \
+    NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")" \
+    RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-lz -C link-arg=-Wl,-rpath,\$ORIGIN:\$ORIGIN/../lib/ai-translator" \
+    cargo build "${BUILD_ARGS[@]}"
+else
+  cargo build "${BUILD_ARGS[@]}"
+fi
 
 rm -rf "$DIST" "$WORK"
+
+# The engine lives under the work directory, which has just been removed: the
+# library is kept aside before the staging starts.
+if [ -n "$CALL_LIB" ]; then
+  KEPT_LIB="$(mktemp -d)/libntgcalls.so"
+  cp "$CALL_LIB" "$KEPT_LIB"
+  CALL_LIB="$KEPT_LIB"
+fi
+
 mkdir -p "$DIST" "$WORK"
 
 # dist/ holds nothing but the files that go into a release.
@@ -51,6 +79,11 @@ mkdir -p "$STAGE"
 install -m 0755 "$WORK/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
 
+# The engine travels next to the binary, where the rpath looks first.
+if [ -n "$CALL_LIB" ]; then
+  install -m 0755 "$CALL_LIB" "$STAGE/libntgcalls.so"
+fi
+
 tar -czf "$DIST/$NAME-$VERSION-$TRIPLE.tar.gz" -C "$WORK" "$NAME-$VERSION"
 
 # The distribution packages. nfpm reads the architecture, the version and the
@@ -59,6 +92,24 @@ tar -czf "$DIST/$NAME-$VERSION-$TRIPLE.tar.gz" -C "$WORK" "$NAME-$VERSION"
 # config: nfpm expands environment variables only in the version and the arch.
 CONFIG="$WORK/nfpm.yaml"
 sed "s|src: build/ai-translator|src: $WORK/ai-translator|" packaging/nfpm.yaml > "$CONFIG"
+
+# The engine of the voice-chat sink goes into the library directory the binary
+# looks at, and only into a build that carries the feature.
+if [ -n "$CALL_LIB" ]; then
+  ENTRY="$WORK/engine-entry.yaml"
+  cat > "$ENTRY" <<EOF
+  - src: $CALL_LIB
+    dst: /usr/lib/ai-translator/libntgcalls.so
+    file_info:
+      mode: 0755
+EOF
+  awk -v entry="$ENTRY" '
+    /# CALL_LIB_PLACEHOLDER/ { while ((getline line < entry) > 0) print line; close(entry); next }
+    { print }
+  ' "$CONFIG" > "$CONFIG.with-engine"
+  mv "$CONFIG.with-engine" "$CONFIG"
+fi
+sed -i "/# CALL_LIB_PLACEHOLDER/d" "$CONFIG"
 ARCH="$DEB_ARCH" VERSION="$VERSION" nfpm package \
   -f "$CONFIG" -p deb -t "$DIST/${NAME}_${VERSION}_${DEB_ARCH}.deb"
 ARCH="$RPM_ARCH" VERSION="$VERSION" nfpm package \
@@ -75,6 +126,9 @@ fi
 APPDIR="$WORK/AppDir"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/$NAME"
 install -m 0755 "$WORK/$NAME" "$APPDIR/usr/bin/$NAME"
+if [ -n "$CALL_LIB" ]; then
+  install -m 0755 "$CALL_LIB" "$APPDIR/usr/bin/libntgcalls.so"
+fi
 cp -r examples "$APPDIR/usr/share/$NAME/examples"
 cp packaging/ai-translator.desktop "$APPDIR/$NAME.desktop"
 cp assets/icon.png "$APPDIR/$NAME.png"

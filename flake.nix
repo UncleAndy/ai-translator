@@ -57,6 +57,9 @@ EOF
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (linuxOnly [
             pkgs.alsa-lib
             pkgs.pipewire
+            # The media engine of the voice-chat sink is a C++ shared library.
+            pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
           ] ++ [
             pkgs.openssl
           ]);

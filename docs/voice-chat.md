@@ -56,24 +56,24 @@ create_if_missing = true             # начать трансляцию, есл
 
 ## Сборка варианта с трансляцией
 
-Движок — `libntgcalls` (C++ WebRTC, LGPL-3.0). Крейт `ntgcalls-sys` при сборке сам
-скачивает статическую сборку движка под целевую платформу и влинковывает её в
-бинарник: рядом с бинарником ничего не нужно, новых зависимостей во время работы
-тоже нет. Готовые сборки движка есть для Linux x86_64, Linux arm64 и macOS arm64;
+Движок — `libntgcalls` (C++ WebRTC, LGPL-3.0). Он грузится **отдельной
+библиотекой**, а не вшивается в бинарник: статическая копия приносит в процесс свой
+C++ рантайм и свой аллокатор и ломает всё остальное, что в нём работает — даже
+когда приёмник выключен. Поэтому `packaging/run-nix.sh` и `packaging/build-linux.sh`
+скачивают готовую сборку движка под целевую платформу (`packaging/fetch-ntgcalls.sh`)
+и кладут её рядом с бинарником; бинарник находит её по rpath. Готовые сборки движка есть для Linux x86_64, Linux arm64 и macOS arm64;
 для остальных целей фича не собирается, и включённый приёмник отвергается проверкой
 конфигурации с понятным сообщением.
 
 ```bash
-# Обычный дистрибутив: zlib и libstdc++ уже в системе.
-cargo build --release --features telegram-call
+# Обычный дистрибутив или NixOS — одна команда, она скачивает движок и собирает.
+FEATURES=telegram-call bash packaging/build-all.sh   # релизные пакеты
+bash packaging/run-nix.sh run -c config.toml         # сборка и запуск на NixOS
 ```
 
-Под NixOS у линковщика нет пути к `zlib`, поэтому его нужно указать:
-
-```bash
-ZLIB=$(nix eval --raw nixpkgs#zlib.outPath)
-RUSTFLAGS="-L $ZLIB/lib" nix develop --command cargo build --features telegram-call
-```
+Голая `cargo build --features telegram-call` тоже работает, но тогда движок
+скачивается как статическая библиотека и вшивается в бинарник — а этого как раз
+делать нельзя (см. выше).
 
 Релизные пакеты с трансляцией собираются той же командой, что и обычно, с указанием
 фичи:
@@ -82,8 +82,8 @@ RUSTFLAGS="-L $ZLIB/lib" nix develop --command cargo build --features telegram-c
 FEATURES=telegram-call bash packaging/build-all.sh
 ```
 
-В `.deb`, `.rpm`, `.tar.gz` и `.AppImage` движок уже внутри бинарника, поэтому
-пакеты отличаются от обычных только размером и самой функцией.
+В `.deb`, `.rpm`, `.tar.gz` и `.AppImage` движок лежит рядом с бинарником
+(`libntgcalls.so`), поэтому пакеты отличаются от обычных размером и самой функцией.
 
 ## Запуск на NixOS
 
