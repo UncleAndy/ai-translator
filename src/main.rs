@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 use ai_translator::app::App;
 use ai_translator::config::Config;
+use ai_translator::source::audio::{CpalDeviceLister, render_devices};
 
 #[derive(Parser)]
 #[command(
@@ -42,6 +43,11 @@ enum Command {
         #[arg(short, long)]
         text: String,
     },
+    /// Показать доступные устройства входа и выхода.
+    ///
+    /// Печатается тот же список, из которого выбирает сам переводчик: поле
+    /// `input_device` в конфигурации задаётся одним из этих имён.
+    Devices,
 }
 
 fn main() -> ExitCode {
@@ -72,6 +78,7 @@ async fn dispatch(cli: Cli) -> ExitCode {
         Command::Check { config } => check(&config),
         Command::Run { config } => run(&config).await,
         Command::Script { config, text } => script(&config, &text).await,
+        Command::Devices => devices(),
     }
 }
 
@@ -163,6 +170,16 @@ async fn script(path: &std::path::Path, text: &str) -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
+    ExitCode::SUCCESS
+}
+
+/// Print the audio devices the translator can choose from.
+///
+/// The names are the ones the audio source itself matches against, so an
+/// `input_device` taken from this list is accepted as is.
+fn devices() -> ExitCode {
+    print!("{}", render_devices(&CpalDeviceLister::new()));
 
     ExitCode::SUCCESS
 }

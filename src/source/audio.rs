@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
+use cpal::traits::DeviceTrait;
 use transono::audio::{AudioDevicesCpal, AudioInputCpal, AudioOutputCpal, LatencyStats};
 use transono::line::TranslationLine;
 use transono::providers::openai::translation::{
@@ -157,6 +158,220 @@ fn build_provider(cfg: &CoreConfig) -> Result<OpenAITranslationProvider, SourceE
 /// Language pair of the line.
 fn langs(cfg: &CoreConfig) -> LangPair {
     crate::source::lang_pair(cfg)
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    /// Подставной список устройств: проверяет формат вывода без звукового железа.
+    struct FakeLister {
+        inputs: Result<Vec<String>, String>,
+        outputs: Result<Vec<String>, String>,
+    }
+
+    impl DeviceLister for FakeLister {
+        fn inputs(&self) -> Result<Vec<String>, String> {
+            self.inputs.clone()
+        }
+
+        fn outputs(&self) -> Result<Vec<String>, String> {
+            self.outputs.clone()
+        }
+    }
+
+    fn fake(inputs: &[&str], outputs: &[&str]) -> FakeLister {
+        FakeLister {
+            inputs: Ok(inputs.iter().map(|name| name.to_string()).collect()),
+            outputs: Ok(outputs.iter().map(|name| name.to_string()).collect()),
+        }
+    }
+
+    fn names(text: &str) -> Vec<String> {
+        text.lines()
+            .filter(|line| line.starts_with("  ") && !line.starts_with("  ("))
+            .map(|line| line.trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn devices_are_listed_by_section_and_alphabetically() {
+        let text = render_devices(&fake(&["Микрофон", "BlackHole 2ch"], &["Speakers"]));
+
+        assert!(text.starts_with("входы:\n"), "{text}");
+        assert!(text.contains("выходы:\n"), "{text}");
+
+        let listed = names(&text);
+        assert_eq!(
+            listed,
+            vec![
+                "default",
+                "BlackHole 2ch",
+                "Микрофон",
+                "default",
+                "Speakers"
+            ],
+            "порядок: default, затем по алфавиту, входы перед выходами: {text}"
+        );
+    }
+
+    #[test]
+    fn the_default_device_is_named_in_the_list_and_in_the_hint() {
+        let text = render_devices(&fake(&["Микрофон"], &["Speakers"]));
+
+        assert!(text.contains("default"), "default назван в списке: {text}");
+        assert!(
+            text.contains("input_device"),
+            "подсказка про поле конфигурации: {text}"
+        );
+    }
+
+    #[test]
+    fn duplicates_are_removed() {
+        let text = render_devices(&fake(&["Микрофон", "Микрофон"], &[]));
+
+        let listed = names(&text);
+        assert_eq!(listed, vec!["default", "Микрофон", "default"], "{text}");
+    }
+
+    #[test]
+    fn an_empty_list_is_reported_in_words() {
+        let text = render_devices(&fake(&[], &[]));
+
+        assert!(
+            text.contains("устройств не найдено"),
+            "пустой список назван словами, а не пустотой: {text}"
+        );
+    }
+
+    #[test]
+    fn a_failed_enumeration_is_reported_with_its_reason() {
+        let lister = FakeLister {
+            inputs: Err("звуковой системы нет".to_string()),
+            outputs: Ok(vec![]),
+        };
+
+        let text = render_devices(&lister);
+
+        assert!(
+            text.contains("звуковой системы нет"),
+            "причина названа: {text}"
+        );
+    }
+}
+
+/// Список доступных звуковых устройств.
+///
+/// Поле `input_device` в конфигурации задаётся **именем** устройства, и имя
+/// сверяется ровно с этим списком — с тем, из которого выбирает сам источник
+/// звука. Имя, взятое из системной утилиты, может не совпасть, поэтому
+/// показывать надо именно этот список.
+pub trait DeviceLister {
+    /// Имена устройств входа в том порядке, в каком их отдал звуковой бэкенд.
+    fn inputs(&self) -> Result<Vec<String>, String>;
+
+    /// Имена устройств выхода в том порядке, в каком их отдал звуковой бэкенд.
+    fn outputs(&self) -> Result<Vec<String>, String>;
+}
+
+/// Печатает список устройств так, как его выводит команда `devices`.
+///
+/// Устройства сортируются без учёта регистра и без повторов, а особое имя
+/// `default` называется первым: именно оно в конфигурации означает «устройство
+/// по умолчанию системы».
+pub fn render_devices(lister: &dyn DeviceLister) -> String {
+    let mut text = String::new();
+
+    for (title, result) in [("входы", lister.inputs()), ("выходы", lister.outputs())] {
+        text.push_str(title);
+        text.push_str(":\n");
+
+        match result {
+            Ok(names) => {
+                // В списке самого бэкенда имени `default` может и не быть,
+                // а в конфигурации оно допустимо всегда.
+                text.push_str("  default\n");
+
+                let names = sorted_unique(names);
+
+                if names.is_empty() {
+                    text.push_str(
+                        "  (устройств не найдено: звуковой системы нет или она не отвечает)\n",
+                    );
+                } else {
+                    for name in names {
+                        text.push_str("  ");
+                        text.push_str(&name);
+                        text.push('\n');
+                    }
+                }
+            }
+            Err(reason) => {
+                text.push_str("  (список не получен: ");
+                text.push_str(&reason);
+                text.push_str(")\n");
+            }
+        }
+    }
+
+    text.push_str(
+        "\nполе input_device в конфигурации задаётся одним из этих имён \
+         (default — устройство по умолчанию системы)\n",
+    );
+
+    text
+}
+
+/// Имена без повторов, по алфавиту и без учёта регистра.
+fn sorted_unique(names: Vec<String>) -> Vec<String> {
+    let mut names = names;
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// Устройства, которые видит cpal, — ровно тот список, из которого выбирает
+/// источник звука.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CpalDeviceLister;
+
+impl CpalDeviceLister {
+    /// Список устройств звукового бэкенда по умолчанию.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl DeviceLister for CpalDeviceLister {
+    fn inputs(&self) -> Result<Vec<String>, String> {
+        let devices = AudioDevicesCpal::new()
+            .input_devices()
+            .map_err(|error| error.to_string())?;
+
+        Ok(device_names(devices))
+    }
+
+    fn outputs(&self) -> Result<Vec<String>, String> {
+        let devices = AudioDevicesCpal::new()
+            .output_devices()
+            .map_err(|error| error.to_string())?;
+
+        Ok(device_names(devices))
+    }
+}
+
+/// Имена устройств; устройство, не сообщившее описание, пропускается.
+///
+/// Через `description()` намеренно, а не через `to_string()`: `Display`
+/// устройства тоже печатает имя, но на отключённом устройстве возвращает
+/// ошибку форматирования, то есть панику, — а команда обязана пережить
+/// отсутствие звука.
+fn device_names(devices: Vec<cpal::Device>) -> Vec<String> {
+    devices
+        .iter()
+        .filter_map(|device| device.description().ok())
+        .map(|description| description.name().to_string())
+        .collect()
 }
 
 #[cfg(test)]

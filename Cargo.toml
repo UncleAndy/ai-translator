@@ -12,6 +12,9 @@ categories = ["multimedia::audio", "api-bindings"]
 
 [dependencies]
 transono = { path = "../transono" }
+# Список устройств для команды `devices`: имена берутся из того же бэкенда,
+# из которого выбирает источник звука (версия та же, что у transono).
+cpal = "0.18"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-std", "io-util"] }
 axum = { version = "0.8", features = ["ws"] }

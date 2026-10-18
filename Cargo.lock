@@ -18,6 +18,7 @@ dependencies = [
  "async-trait",
  "axum",
  "clap",
+ "cpal",
  "crossterm 0.28.1",
  "dotenvy",
  "futures-util",
