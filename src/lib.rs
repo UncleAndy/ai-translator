@@ -21,5 +21,8 @@ pub mod sink;
 pub mod source;
 /// Sink supervisor: starting, isolating and restarting sinks.
 pub mod supervisor;
+/// Sign-in of the account that broadcasts into a Telegram voice chat.
+#[cfg(feature = "telegram-call")]
+pub mod telegram_account;
 /// Optional speech synthesis (text → audio).
 pub mod tts;

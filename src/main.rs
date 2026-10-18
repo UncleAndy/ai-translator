@@ -48,6 +48,15 @@ enum Command {
     /// Печатается тот же список, из которого выбирает сам переводчик: поле
     /// `input_device` в конфигурации задаётся одним из этих имён.
     Devices,
+    /// Войти в аккаунт, который вещает в голосовой чат Telegram.
+    ///
+    /// Номер, код и пароль двухфакторной защиты вводятся здесь и никуда не
+    /// записываются; остаётся только файл сессии из конфигурации.
+    TelegramLogin {
+        /// Путь к файлу конфигурации.
+        #[arg(short, long)]
+        config: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -79,7 +88,71 @@ async fn dispatch(cli: Cli) -> ExitCode {
         Command::Run { config } => run(&config).await,
         Command::Script { config, text } => script(&config, &text).await,
         Command::Devices => devices(),
+        Command::TelegramLogin { config } => telegram_login(&config).await,
     }
+}
+
+/// Sign the broadcasting account in, once.
+#[cfg(feature = "telegram-call")]
+async fn telegram_login(path: &std::path::Path) -> ExitCode {
+    use ai_translator::config::VoiceSinkConfig;
+    use ai_translator::telegram_account::{Credentials, sign_in};
+
+    let cfg = match load(path) {
+        Ok(cfg) => cfg,
+        Err(code) => return code,
+    };
+
+    let spec = cfg.sink.voice.iter().find_map(|sink| match sink {
+        VoiceSinkConfig::TelegramCall {
+            api_id_env,
+            api_hash_env,
+            session_file,
+            ..
+        } => Some((
+            api_id_env.clone(),
+            api_hash_env.clone(),
+            session_file.clone(),
+        )),
+        VoiceSinkConfig::VirtualSink { .. } => None,
+    });
+
+    let Some((api_id_env, api_hash_env, session_file)) = spec else {
+        eprintln!(
+            "в конфигурации нет приёмника [[sink.voice]] type = \"telegram_call\": входить некуда"
+        );
+        return ExitCode::FAILURE;
+    };
+
+    let credentials = match Credentials::from_env(&api_id_env, &api_hash_env, &session_file) {
+        Ok(credentials) => credentials,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match sign_in(&credentials).await {
+        Ok(account) => {
+            println!("вход выполнен: {} (id {})", account.name, account.id);
+            println!("сессия: {}", credentials.session_file.display());
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            eprintln!("{reason}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Sign the broadcasting account in, once: this build cannot broadcast at all.
+#[cfg(not(feature = "telegram-call"))]
+async fn telegram_login(_path: &std::path::Path) -> ExitCode {
+    eprintln!(
+        "эта сборка не умеет транслировать в голосовой чат: платформа или архитектура не \
+         поддерживается"
+    );
+    ExitCode::FAILURE
 }
 
 /// Check the configuration without starting anything.
