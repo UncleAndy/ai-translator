@@ -92,6 +92,26 @@ pub enum TextSinkConfig {
         #[serde(default)]
         bilingual: bool,
     },
+    /// Send the translation to a Telegram chat through a bot.
+    Telegram {
+        /// Whether the sink is enabled.
+        #[serde(default = "yes")]
+        enabled: bool,
+        /// Chat identifier: a number, `@channel`, or the id of a private chat.
+        chat_id: String,
+        /// Name of the environment variable holding the bot token.
+        #[serde(default = "default_telegram_token_env")]
+        token_env: String,
+        /// Post the source text above the translation.
+        #[serde(default)]
+        bilingual: bool,
+        /// Send without a notification sound.
+        #[serde(default)]
+        silent: bool,
+        /// Forum topic identifier, when the chat is a forum.
+        #[serde(default)]
+        message_thread_id: Option<i64>,
+    },
     /// Send the translation over HTTP POST using a body template.
     Webhook {
         /// Whether the sink is enabled.
@@ -115,6 +135,7 @@ impl TextSinkConfig {
             TextSinkConfig::Console { enabled }
             | TextSinkConfig::Websocket { enabled, .. }
             | TextSinkConfig::Transcript { enabled, .. }
+            | TextSinkConfig::Telegram { enabled, .. }
             | TextSinkConfig::Webhook { enabled, .. } => *enabled,
         }
     }
@@ -125,6 +146,7 @@ impl TextSinkConfig {
             TextSinkConfig::Console { .. } => "console",
             TextSinkConfig::Websocket { .. } => "websocket",
             TextSinkConfig::Transcript { .. } => "transcript",
+            TextSinkConfig::Telegram { .. } => "telegram",
             TextSinkConfig::Webhook { .. } => "webhook",
         }
     }
@@ -293,6 +315,24 @@ impl Config {
                         });
                     }
                 }
+                TextSinkConfig::Telegram {
+                    chat_id, token_env, ..
+                } => {
+                    if chat_id.trim().is_empty() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.telegram.chat_id".into(),
+                            reason: "пустое значение".into(),
+                        });
+                    }
+                    if token_env.trim().is_empty() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.telegram.token_env".into(),
+                            reason: "пустое значение".into(),
+                        });
+                    } else if std::env::var(token_env).is_err() {
+                        problems.push(ConfigProblem::MissingEnv(token_env.clone()));
+                    }
+                }
                 TextSinkConfig::Webhook {
                     url,
                     body_template,
@@ -366,6 +406,10 @@ fn default_source_lang() -> String {
 
 fn default_device() -> String {
     "default".to_string()
+}
+
+fn default_telegram_token_env() -> String {
+    "TELEGRAM_BOT_TOKEN".to_string()
 }
 
 fn default_bind() -> String {
@@ -661,6 +705,89 @@ mod tests {
     }
 
     #[test]
+    fn telegram_sink_is_parsed_with_its_defaults() {
+        // PATH есть в любом окружении: сам токен здесь не нужен, проверяется
+        // разбор и умолчания.
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            chat_id = "@translations"
+            token_env = "PATH"
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.sink.text[0].kind(), "telegram");
+        assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Telegram {
+                token_env,
+                bilingual,
+                silent,
+                message_thread_id,
+                ..
+            } => {
+                assert_eq!(token_env, "PATH");
+                assert!(!bilingual, "исходный текст по умолчанию не дублируется");
+                assert!(!silent, "по умолчанию сообщение со звуком");
+                assert_eq!(*message_thread_id, None);
+            }
+            other => panic!("ожидался приёмник Telegram, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telegram_token_variable_defaults_to_the_bot_token_name() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            chat_id = "@translations"
+        "#,
+        )
+        .unwrap();
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Telegram { token_env, .. } => {
+                assert_eq!(token_env, "TELEGRAM_BOT_TOKEN");
+            }
+            other => panic!("ожидался приёмник Telegram, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telegram_without_its_token_variable_is_reported() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            chat_id = "@translations"
+            token_env = "AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN"
+        "#,
+        )
+        .unwrap();
+
+        let text = cfg
+            .validate()
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            text.contains("AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn the_all_example_parses_and_matches_the_schema() {
         let cfg: Config = toml::from_str(include_str!("../examples/config.all.toml")).unwrap();
 
@@ -668,8 +795,8 @@ mod tests {
         // поля уронит этот тест вместе с примером.
         assert_eq!(
             cfg.sink.text.len(),
-            4,
-            "console, websocket, transcript и webhook"
+            5,
+            "console, websocket, transcript, telegram и webhook"
         );
         assert_eq!(cfg.sink.voice.len(), 1, "virtual_sink");
         assert!(

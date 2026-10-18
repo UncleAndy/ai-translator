@@ -15,7 +15,7 @@ go to a stage screen, broadcast captions and a voice channel simultaneously.
 ## Status
 
 Stage 1 (MVP) is implemented and covered by tests: the event bus, the sink subsystem, the
-console, WebSocket and transcript sinks, the supervisor, the audio source on the synchronous
+console, WebSocket, transcript and Telegram sinks, the supervisor, the audio source on the synchronous
 translation provider, the offline text and scripted sources, and the command-line interface.
 Interfaces may still change before the 1.0 release.
 
@@ -88,6 +88,7 @@ Implemented on stage 1:
 | `console` | terminal output for observation and debugging |
 | `websocket` | local HTTP server plus a full-screen page for a stage display or OBS Browser Source |
 | `transcript` | recording to TXT, SRT, VTT or JSONL, optionally bilingual |
+| `telegram` | posting the translation into a chat or channel through a bot, one message per phrase, edited as the phrase grows |
 
 Declared in the configuration and reserved for the next stages:
 

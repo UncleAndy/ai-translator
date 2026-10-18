@@ -5,6 +5,7 @@
 //! the [`unknown_type`] helper for callers that switch on a type name by hand.
 
 use super::text::console::ConsoleSink;
+use super::text::telegram::TelegramSink;
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
 use super::text::websocket::{ScreenSettings, WebsocketSink};
@@ -41,6 +42,21 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             ..
         } => Ok(Box::new(TranscriptSink::new(
             id, path, *format, *bilingual,
+        )?)),
+        TextSinkConfig::Telegram {
+            chat_id,
+            token_env,
+            bilingual,
+            silent,
+            message_thread_id,
+            ..
+        } => Ok(Box::new(TelegramSink::from_env(
+            id,
+            chat_id,
+            token_env,
+            *bilingual,
+            *silent,
+            *message_thread_id,
         )?)),
         TextSinkConfig::Webhook {
             url,
@@ -113,6 +129,19 @@ mod tests {
         }
     }
 
+    /// Токен берётся из существующей переменной: сборка приёмника не должна
+    /// зависеть от сети, а проверяется только маршрутизация по типу.
+    fn telegram() -> TextSinkConfig {
+        TextSinkConfig::Telegram {
+            enabled: true,
+            chat_id: "-1001234567890".into(),
+            token_env: "PATH".into(),
+            bilingual: false,
+            silent: true,
+            message_thread_id: None,
+        }
+    }
+
     #[test]
     fn builds_console_sink_by_type_name() {
         let sink = build_text_sink("console-1", &console()).unwrap();
@@ -129,6 +158,7 @@ mod tests {
                 transcript("/tmp/ai-translator-test.txt", TranscriptFormat::Txt),
             ),
             ("hook", webhook()),
+            ("tg", telegram()),
         ];
 
         for (id, cfg) in cases {
