@@ -15,7 +15,7 @@ use crate::sink::SinkError;
 use crate::sink::registry::{build_text_sink, build_voice_sink};
 use crate::source::audio::{AudioSource, SourceError};
 use crate::source::text::TextSource;
-use crate::supervisor::{RestartPolicy, Supervisor};
+use crate::supervisor::{RestartPolicy, SinkState, Supervisor};
 
 /// How many events may wait for one sink before the bus starts dropping
 /// intermediate revisions.
@@ -123,18 +123,22 @@ impl App {
         })
     }
 
+    /// State of a sink, or [`SinkState::Unknown`] if there is no such sink.
+    pub fn sink_state(&self, id: &str) -> SinkState {
+        self.supervisor.state_of(id)
+    }
+
+    /// States of all sinks, in a stable order.
+    pub fn sink_states(&self) -> Vec<(String, SinkState)> {
+        let mut states = self.supervisor.states();
+        states.sort_by(|left, right| left.0.cmp(&right.0));
+
+        states
+    }
+
     /// Identifiers of the running sinks, in a stable order.
     pub fn sink_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self
-            .supervisor
-            .states()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-
-        ids.sort();
-
-        ids
+        self.sink_states().into_iter().map(|(id, _)| id).collect()
     }
 
     /// Start translation from the microphone.
