@@ -12,6 +12,13 @@
   перевода на страницу не отправляются.
 
   Клавиша F разворачивает страницу на весь экран, курсор прячется при простое.
+
+  Размер текста задаёт приёмник и отдаёт странице скриптом /settings.js
+  (window.TRANSLATOR_SETTINGS): line_size_vw — размер перевода в процентах
+  ширины экрана, min_line_size_vw — предел ужимания длинной фразы. Во время
+  перевода размер не меняется: ужимается он только тогда, когда фраза иначе
+  не поместится. При открытии страницы как файла настройки не приходят и
+  остаются значения по умолчанию.
 -->
 <html lang="ru">
 <head>
@@ -101,17 +108,30 @@
 <body>
 <div id="status" class="off">подключение…</div>
 <main id="stage"><div id="lines"></div></main>
+<!-- Настройки показа отдаёт приёмник (ScreenSettings в sink/text/websocket.rs).
+     Когда страница открыта как файл, скрипт не загружается и остаются значения
+     по умолчанию из кода ниже. -->
+<script src="/settings.js"></script>
 <script>
 "use strict";
 
 const MAX_LINES = 3;
 const RECONNECT_MS = 1500;
-const BASE_LINE_SIZE = 4.5;
-const MIN_LINE_SIZE = 2.0;
-/* Предел роста: короткая фраза должна заполнять экран по высоте, но не
-   превращаться в одну гигантскую букву. Длинные фразы до предела не доходят —
-   их останавливает перенос строк. */
-const MAX_LINE_SIZE = 30.0;
+
+/* Размер текста приходит из настроек приёмника и во время перевода не меняется.
+   Значения ниже — то же самое, что приёмник отдаёт по умолчанию. */
+const DEFAULTS = { line_size_vw: 4.5, min_line_size_vw: 2.0 };
+const configured = (window.TRANSLATOR_SETTINGS && typeof window.TRANSLATOR_SETTINGS === "object")
+  ? window.TRANSLATOR_SETTINGS
+  : {};
+
+function setting(name) {
+  const value = Number(configured[name]);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULTS[name];
+}
+
+const BASE_LINE_SIZE = setting("line_size_vw");
+const MIN_LINE_SIZE = setting("min_line_size_vw");
 const LINE_STEP = 0.25;
 
 const stageEl = document.getElementById("stage");
@@ -137,45 +157,19 @@ function setLineSize(vw) {
   document.documentElement.style.setProperty("--line-size", vw + "vw");
 }
 
-function clamp(value, low, high) {
-  return Math.min(high, Math.max(low, value));
-}
-
-/* Подобрать размер шрифта так, чтобы экран был занят целиком.
+/* Поставить размер текста из настроек.
  *
- * Раньше шрифт только ужимался от неизменной основы, поэтому одна-две
- * короткие фразы занимали нижнюю треть экрана. Теперь размер ищется в обе
- * стороны: сначала по оценке (высота текста почти пропорциональна размеру
- * шрифта), затем уточняется шагами — переносы и отступы пропорциональны не
- * строго.
+ * Размер постоянный: подстраивать его под каждую фразу нельзя, иначе текст
+ * «дышит» во время перевода. Ужимаемся только тогда, когда фраза иначе не
+ * поместится на экран, и не ниже предела из настроек.
  */
 function fit() {
-  const available = stageEl.clientHeight;
-  if (available <= 0 || linesEl.children.length === 0) return;
-
-  setLineSize(BASE_LINE_SIZE);
-  const base = linesEl.scrollHeight;
-  if (base <= 0) return;
-
-  let size = clamp((BASE_LINE_SIZE * available) / base, MIN_LINE_SIZE, MAX_LINE_SIZE);
+  let size = BASE_LINE_SIZE;
   setLineSize(size);
 
-  // Не помещается — ужимаем.
-  while (size > MIN_LINE_SIZE && linesEl.scrollHeight > available) {
+  while (size > MIN_LINE_SIZE && linesEl.scrollHeight > stageEl.clientHeight) {
     size -= LINE_STEP;
     setLineSize(size);
-  }
-
-  // Помещается с запасом — растём, пока есть место.
-  while (size < MAX_LINE_SIZE) {
-    setLineSize(size + LINE_STEP);
-
-    if (linesEl.scrollHeight > available) {
-      setLineSize(size);
-      break;
-    }
-
-    size += LINE_STEP;
   }
 }
 

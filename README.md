@@ -110,6 +110,11 @@ enabled = true
 type = "websocket"
 enabled = true
 bind = "0.0.0.0:8643"
+# Translation size in percent of the screen width, and the lower bound it
+# shrinks to when a long phrase does not fit. The size stays fixed while the
+# translation runs.
+line_size_vw = 4.5
+min_line_size_vw = 2.0
 
 [[sink.text]]
 type = "transcript"
@@ -118,6 +123,11 @@ path = "transcript.srt"
 format = "srt"
 bilingual = true
 ```
+
+The `websocket` sink serves the display page on `bind`; the page itself is
+`web/index.html`, embedded into the binary. It asks the sink for its display
+settings at `/settings.js`, so `line_size_vw` and `min_line_size_vw` are the only
+knobs for the text size on the big screen.
 
 Ready-made examples live in `examples/`: `config.dev.toml` for development,
 `config.stream.toml` for broadcasting, `config.offline.toml` for a run without network.

@@ -89,7 +89,7 @@ class El {
   }
 }
 
-function load(protocol, stageHeight = 900) {
+function load(protocol, stageHeight = 900, settings = null) {
   const stageEl = new El("main");
   const linesEl = new El("div");
   const statusEl = new El("div");
@@ -122,6 +122,7 @@ function load(protocol, stageHeight = 900) {
   const timers = [];
   const location = { protocol, host: "127.0.0.1:8642" };
   const window = { addEventListener: () => {} };
+  if (settings) window.TRANSLATOR_SETTINGS = settings;
 
   let socket = null;
   class FakeWebSocket {
@@ -271,30 +272,37 @@ const phraseText = (lines, index) => lines.children[index].querySelector(".line"
   check("переподключение запланировано", page.timers.length === 1 && page.timers[0].ms === 1500, JSON.stringify(page.timers));
 }
 
-// --- размер шрифта по высоте экрана ------------------------------------------
-// Заглушка считает высоту текста как «фразы × размер шрифта × 20», поэтому
-// проверяются отношения: рост при запасе места, ужимание при нехватке и упор в
-// оба предела.
+// --- размер текста из настроек -----------------------------------------------
+// Заглушка считает высоту текста как «фразы × размер шрифта × 20». Размер
+// должен быть постоянным и задаваться настройками приёмника; ужимание — только
+// вынужденное и не ниже предела из настроек.
 {
   const roomy = load("http:", 900);
   roomy.send({ line: 0, seq: 1, text: "короткая фраза", is_final: true });
-  check("на просторном экране шрифт растёт", roomy.lineSize() === 30, String(roomy.lineSize()));
+  check("размер по умолчанию не подстраивается под фразу", roomy.lineSize() === 4.5, String(roomy.lineSize()));
 
-  const tight = load("http:", 300);
+  roomy.send({ line: 0, seq: 2, text: "длинная фраза, которая заметно длиннее предыдущей и всё равно помещается", is_final: true });
+  check("размер не меняется в процессе перевода", roomy.lineSize() === 4.5, String(roomy.lineSize()));
+
+  const sized = load("http:", 900, { line_size_vw: 8, min_line_size_vw: 3 });
+  sized.send({ line: 0, seq: 1, text: "фраза", is_final: true });
+  check("размер берётся из настроек", sized.lineSize() === 8, String(sized.lineSize()));
+
+  const tight = load("http:", 100);
   for (let i = 1; i <= 3; i += 1) {
     tight.send({ line: 0, seq: i, text: "фраза " + i, is_final: true });
   }
-  check("на тесном экране шрифт подобран по высоте", tight.lineSize() === 5, String(tight.lineSize()));
+  check("длинный текст ужимается до предела по умолчанию", tight.lineSize() === 2, String(tight.lineSize()));
 
-  const tiny = load("http:", 100);
+  const floored = load("http:", 100, { line_size_vw: 8, min_line_size_vw: 6 });
   for (let i = 1; i <= 3; i += 1) {
-    tiny.send({ line: 0, seq: i, text: "фраза " + i, is_final: true });
+    floored.send({ line: 0, seq: i, text: "фраза " + i, is_final: true });
   }
-  check("ужимание упирается в предел", tiny.lineSize() === 2, String(tiny.lineSize()));
+  check("ужимание не идёт ниже предела из настроек", floored.lineSize() === 6, String(floored.lineSize()));
 
-  const grown = load("http:", 100);
-  grown.send({ line: 0, seq: 1, text: "одна фраза", is_final: true });
-  check("одна фраза занимает экран, а не нижний угол", grown.lineSize() === 5, String(grown.lineSize()));
+  const broken = load("http:", 900, { line_size_vw: 0, min_line_size_vw: "нет" });
+  broken.send({ line: 0, seq: 1, text: "фраза", is_final: true });
+  check("негодные настройки заменяются значениями по умолчанию", broken.lineSize() === 4.5, String(broken.lineSize()));
 }
 
 console.log(failures === 0 ? "\nВСЕ ПРОВЕРКИ ПРОЙДЕНЫ" : `\nПРОВАЛОВ: ${failures}`);

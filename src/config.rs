@@ -71,6 +71,12 @@ pub enum TextSinkConfig {
         /// Listen address.
         #[serde(default = "default_bind")]
         bind: String,
+        /// Translation font size, in percent of the screen width.
+        #[serde(default = "default_line_size_vw")]
+        line_size_vw: f64,
+        /// Lower bound the font shrinks to when a phrase does not fit.
+        #[serde(default = "default_min_line_size_vw")]
+        min_line_size_vw: f64,
     },
     /// Write the transcript and the translation to a file.
     Transcript {
@@ -249,11 +255,33 @@ impl Config {
 
             match sink {
                 TextSinkConfig::Console { .. } => {}
-                TextSinkConfig::Websocket { bind, .. } => {
+                TextSinkConfig::Websocket {
+                    bind,
+                    line_size_vw,
+                    min_line_size_vw,
+                    ..
+                } => {
                     if bind.trim().is_empty() {
                         problems.push(ConfigProblem::Invalid {
                             field: "sink.text.websocket.bind".into(),
                             reason: "пустое значение".into(),
+                        });
+                    }
+                    if *line_size_vw <= 0.0 || !line_size_vw.is_finite() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.websocket.line_size_vw".into(),
+                            reason: "размер должен быть положительным числом".into(),
+                        });
+                    }
+                    if *min_line_size_vw <= 0.0 || !min_line_size_vw.is_finite() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.websocket.min_line_size_vw".into(),
+                            reason: "размер должен быть положительным числом".into(),
+                        });
+                    } else if *min_line_size_vw > *line_size_vw {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.websocket.min_line_size_vw".into(),
+                            reason: "минимальный размер больше основного".into(),
                         });
                     }
                 }
@@ -342,6 +370,16 @@ fn default_device() -> String {
 
 fn default_bind() -> String {
     "0.0.0.0:8642".to_string()
+}
+
+/// Translation font size, in percent of the screen width.
+fn default_line_size_vw() -> f64 {
+    4.5
+}
+
+/// Lower bound the font shrinks to when a phrase does not fit.
+fn default_min_line_size_vw() -> f64 {
+    2.0
 }
 
 #[cfg(test)]
@@ -439,6 +477,32 @@ mod tests {
     }
 
     #[test]
+    fn a_non_positive_display_size_is_reported() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "websocket"
+            enabled = true
+            line_size_vw = 0
+            min_line_size_vw = 5
+        "#,
+        )
+        .unwrap();
+
+        let problems = cfg.validate();
+        let text = problems
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(text.contains("line_size_vw"), "{text}");
+        assert!(text.contains("min_line_size_vw"), "{text}");
+        assert!(text.contains("больше основного"), "{text}");
+    }
+
+    #[test]
     fn config_without_enabled_sinks_is_reported() {
         let cfg: Config = toml::from_str(
             r#"
@@ -530,7 +594,16 @@ mod tests {
         .unwrap();
 
         match &cfg.sink.text[0] {
-            TextSinkConfig::Websocket { bind, .. } => assert_eq!(bind, "0.0.0.0:8642"),
+            TextSinkConfig::Websocket {
+                bind,
+                line_size_vw,
+                min_line_size_vw,
+                ..
+            } => {
+                assert_eq!(bind, "0.0.0.0:8642");
+                assert_eq!(*line_size_vw, 4.5, "размер по умолчанию");
+                assert_eq!(*min_line_size_vw, 2.0, "предел ужимания по умолчанию");
+            }
             other => panic!("ожидался приёмник websocket, получено {other:?}"),
         }
     }

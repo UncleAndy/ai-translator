@@ -7,7 +7,7 @@
 use super::text::console::ConsoleSink;
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
-use super::text::websocket::WebsocketSink;
+use super::text::websocket::{ScreenSettings, WebsocketSink};
 use super::voice::virtual_sink::VirtualSink;
 use super::{Result, SinkError, TextSink, VoiceSink};
 use crate::config::{TextSinkConfig, VoiceSinkConfig};
@@ -21,7 +21,19 @@ use crate::config::{TextSinkConfig, VoiceSinkConfig};
 pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSink>> {
     match cfg {
         TextSinkConfig::Console { .. } => Ok(Box::new(ConsoleSink::new(id))),
-        TextSinkConfig::Websocket { bind, .. } => Ok(Box::new(WebsocketSink::new(id, bind)?)),
+        TextSinkConfig::Websocket {
+            bind,
+            line_size_vw,
+            min_line_size_vw,
+            ..
+        } => Ok(Box::new(WebsocketSink::new(
+            id,
+            bind,
+            ScreenSettings {
+                line_size_vw: *line_size_vw,
+                min_line_size_vw: *min_line_size_vw,
+            },
+        )?)),
         TextSinkConfig::Transcript {
             path,
             format,
@@ -78,6 +90,8 @@ mod tests {
         TextSinkConfig::Websocket {
             enabled: true,
             bind: bind.to_string(),
+            line_size_vw: 4.5,
+            min_line_size_vw: 2.0,
         }
     }
 

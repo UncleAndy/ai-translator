@@ -25,6 +25,52 @@ const BROADCAST_CAPACITY: usize = 64;
 /// The big-screen page, embedded into the binary.
 const PAGE: &str = include_str!("../../../web/index.html");
 
+/// Display settings handed to the page.
+///
+/// The page must not change the font size while a translation runs, so the size
+/// comes from the configuration: it is fixed for the whole session and only
+/// shrinks (down to [`ScreenSettings::min_line_size_vw`]) when a long phrase
+/// would not fit the screen otherwise.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenSettings {
+    /// Translation font size, in percent of the screen width.
+    pub line_size_vw: f64,
+    /// Lower bound the font shrinks to when a phrase does not fit.
+    pub min_line_size_vw: f64,
+}
+
+impl Default for ScreenSettings {
+    fn default() -> Self {
+        Self {
+            line_size_vw: 4.5,
+            min_line_size_vw: 2.0,
+        }
+    }
+}
+
+impl ScreenSettings {
+    /// JavaScript handing the settings to the page.
+    ///
+    /// The page reads `window.TRANSLATOR_SETTINGS`; when the script is not
+    /// served (the page is opened as a file), the page falls back to the same
+    /// values.
+    pub fn to_script(&self) -> String {
+        format!(
+            "window.TRANSLATOR_SETTINGS = {{\"line_size_vw\": {}, \"min_line_size_vw\": {}}};\n",
+            self.line_size_vw, self.min_line_size_vw
+        )
+    }
+}
+
+/// Shared state of the display server.
+#[derive(Clone)]
+struct ScreenState {
+    /// Translations broadcast to the connected screens.
+    tx: broadcast::Sender<String>,
+    /// Settings the page asks for.
+    settings: ScreenSettings,
+}
+
 /// A message sent to the big-screen page.
 ///
 /// The wire format is described in the header of `web/index.html`: a
@@ -96,6 +142,7 @@ pub struct WebsocketSink {
     id: String,
     addr: SocketAddr,
     tx: broadcast::Sender<String>,
+    settings: ScreenSettings,
     /// Listening socket, until the server task takes it over.
     listener: Option<std::net::TcpListener>,
     stop_tx: watch::Sender<bool>,
@@ -115,7 +162,7 @@ impl WebsocketSink {
     ///
     /// Returns an error when the address is not a `host:port` socket address or
     /// cannot be occupied.
-    pub fn new(id: &str, bind: &str) -> Result<Self> {
+    pub fn new(id: &str, bind: &str, settings: ScreenSettings) -> Result<Self> {
         let requested: SocketAddr = bind.parse().map_err(|e| {
             SinkError::Protocol(format!("некорректный адрес прослушивания {bind}: {e}"))
         })?;
@@ -133,6 +180,7 @@ impl WebsocketSink {
             id: id.to_string(),
             addr,
             tx,
+            settings,
             listener: Some(listener),
             stop_tx,
             last_source: String::new(),
@@ -141,6 +189,11 @@ impl WebsocketSink {
         sink.start_if_possible();
 
         Ok(sink)
+    }
+
+    /// Display settings handed to the page.
+    pub fn settings(&self) -> ScreenSettings {
+        self.settings
     }
 
     /// Address the server actually listens on.
@@ -165,7 +218,12 @@ impl WebsocketSink {
         };
 
         match tokio::runtime::Handle::try_current() {
-            Ok(_) => spawn_server(listener, self.tx.clone(), self.stop_tx.subscribe()),
+            Ok(_) => spawn_server(
+                listener,
+                self.tx.clone(),
+                self.settings,
+                self.stop_tx.subscribe(),
+            ),
             Err(_) => self.listener = Some(listener),
         }
     }
@@ -206,11 +264,12 @@ impl TextSink for WebsocketSink {
 }
 
 /// Routes of the display server.
-fn router(tx: broadcast::Sender<String>) -> Router {
+fn router(state: ScreenState) -> Router {
     Router::new()
         .route("/", get(page))
+        .route("/settings.js", get(settings_script))
         .route("/ws", get(upgrade))
-        .with_state(tx)
+        .with_state(state)
 }
 
 /// Serve the embedded page.
@@ -218,11 +277,23 @@ async fn page() -> Html<&'static str> {
     Html(PAGE)
 }
 
+/// Serve the display settings as a script the page loads.
+async fn settings_script(State(state): State<ScreenState>) -> impl axum::response::IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        state.settings.to_script(),
+    )
+}
+
 /// Upgrade a screen connection.
 async fn upgrade(
     ws: WebSocketUpgrade,
-    State(tx): State<broadcast::Sender<String>>,
+    State(state): State<ScreenState>,
 ) -> impl axum::response::IntoResponse {
+    let tx = state.tx.clone();
     ws.on_upgrade(move |socket| serve_client(socket, tx))
 }
 
@@ -255,6 +326,7 @@ async fn serve_client(mut socket: WebSocket, tx: broadcast::Sender<String>) {
 fn spawn_server(
     listener: std::net::TcpListener,
     tx: broadcast::Sender<String>,
+    settings: ScreenSettings,
     mut stop: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
@@ -274,7 +346,7 @@ fn spawn_server(
             }
         };
 
-        if let Err(error) = axum::serve(listener, router(tx))
+        if let Err(error) = axum::serve(listener, router(ScreenState { tx, settings }))
             .with_graceful_shutdown(shutdown)
             .await
         {
@@ -318,13 +390,14 @@ mod tests {
 
     #[test]
     fn rejects_unusable_listen_address() {
-        let err = WebsocketSink::new("screen", "не-адрес").unwrap_err();
+        let err = WebsocketSink::new("screen", "не-адрес", ScreenSettings::default()).unwrap_err();
         assert!(matches!(err, SinkError::Protocol(_)), "{err:?}");
     }
 
     #[test]
     fn occupies_the_requested_address() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0").expect("адрес занят");
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+            .expect("адрес занят");
         assert!(sink.addr().ip().is_loopback());
         assert_ne!(sink.addr().port(), 0, "порт назначает система");
         assert_eq!(sink.id(), "screen");
@@ -447,7 +520,8 @@ mod tests {
 
     #[tokio::test]
     async fn serves_the_page_over_http() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0").expect("адрес занят");
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+            .expect("адрес занят");
         let addr = sink.addr();
 
         let mut stream = TcpStream::connect(addr)
@@ -467,11 +541,54 @@ mod tests {
         assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
         assert!(answer.contains("Экран перевода"), "страница отдана целиком");
         assert!(answer.contains("ws"), "страница содержит подключение");
+        assert!(
+            answer.contains("/settings.js"),
+            "страница спрашивает настройки показа"
+        );
+    }
+
+    #[tokio::test]
+    async fn serves_the_display_settings_from_the_configuration() {
+        let settings = ScreenSettings {
+            line_size_vw: 7.5,
+            min_line_size_vw: 3.0,
+        };
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", settings).expect("адрес занят");
+        let addr = sink.addr();
+
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .expect("подключение к серверу");
+        stream
+            .write_all(b"GET /settings.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("запрос отправлен");
+
+        let mut answer = String::new();
+        stream
+            .read_to_string(&mut answer)
+            .await
+            .expect("ответ прочитан");
+
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        assert!(
+            answer.contains("javascript"),
+            "скрипт отдаётся с типом JavaScript: {answer}"
+        );
+        assert!(
+            answer.contains("\"line_size_vw\": 7.5"),
+            "размер из настройки: {answer}"
+        );
+        assert!(
+            answer.contains("\"min_line_size_vw\": 3"),
+            "предел ужимания из настройки: {answer}"
+        );
     }
 
     #[tokio::test]
     async fn broadcasts_translation_to_a_connected_screen() {
-        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0").expect("адрес занят");
+        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+            .expect("адрес занят");
         let (mut screen, rest) = connect_screen(sink.addr()).await;
 
         sink.on_event(&translated("привет мир", true, 7))
@@ -489,7 +606,8 @@ mod tests {
 
     #[tokio::test]
     async fn source_text_is_attached_to_the_translation() {
-        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0").expect("адрес занят");
+        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+            .expect("адрес занят");
         let (mut screen, rest) = connect_screen(sink.addr()).await;
 
         sink.on_event(&source_text("hello world"))
@@ -509,7 +627,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_stops_the_server() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0").expect("адрес занят");
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+            .expect("адрес занят");
         let addr = sink.addr();
 
         Box::new(sink).shutdown().await.expect("остановка принята");
