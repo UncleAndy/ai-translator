@@ -1,0 +1,6 @@
+# The osxcross image documented in docs/macos-cross-build.md, with both Apple
+# targets installed for the toolchain packaging/build-all.sh selects. Without
+# them cargo reports "can't find crate for core".
+FROM rust-darwin-builder:1.95
+
+RUN rustup target add --toolchain 1.95.0 x86_64-apple-darwin aarch64-apple-darwin

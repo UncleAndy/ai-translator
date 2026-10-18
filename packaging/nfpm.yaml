@@ -22,6 +22,8 @@ depends:
   - libpipewire-0.3-0 (>= 1.0)
   - libasound2
 contents:
+  # The path to the binary is substituted by packaging/build-linux.sh: nfpm
+  # expands environment variables in the version and the architecture only.
   - src: build/ai-translator
     dst: /usr/bin/ai-translator
     file_info:

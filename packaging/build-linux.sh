@@ -3,13 +3,13 @@
 #
 # Run it on an ordinary distribution, not from the Nix flake: a binary built
 # under Nix carries a /nix/store interpreter and does not start anywhere else.
-# The release workflow uses ubuntu-24.04, because libspa-sys generates its
-# bindings from the system PipeWire headers and needs PipeWire 1.0. The binary
-# that comes out wants libpipewire-0.3-0 >= 1.0 at run time (Ubuntu 24.04+,
-# Debian 13+, Fedora 40+) and no glibc newer than 2.34.
+# packaging/build-all.sh does exactly that, in an ubuntu 24.04 container,
+# because libspa-sys generates its bindings from the system PipeWire headers and
+# needs PipeWire 1.0. The binary wants libpipewire-0.3-0 >= 1.0 at run time
+# (Ubuntu 24.04+, Debian 13+, Fedora 40+) and no glibc newer than 2.34.
 #
-# Environment: VERSION (default: the version in Cargo.toml).
-# Needs: cargo, strip, tar, curl, nfpm on PATH.
+# Environment: DIST (default dist), WORK (default build), CARGO_TARGET_DIR.
+# Needs: cargo, strip, tar, gzip, curl, nfpm on PATH.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,63 +18,67 @@ NAME=ai-translator
 DEB_ARCH=amd64
 RPM_ARCH=x86_64
 TRIPLE=x86_64-linux
+DIST="${DIST:-dist}"
+WORK="${WORK:-build}"
 # The version comes from Cargo.toml, not from the environment: build images
 # define VERSION for their own purposes.
 VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
-DIST=dist
+BIN_DIR="${CARGO_TARGET_DIR:-target}/release"
 
 echo "== ai-translator $VERSION =="
 test -n "$VERSION"
 
 cargo build --release --locked
 
-rm -rf "$DIST" build
-mkdir -p "$DIST" build
+rm -rf "$DIST" "$WORK"
+mkdir -p "$DIST" "$WORK"
 
-# Strip into build/ so the binary in the target directory stays untouched, and
-# so that dist/ holds nothing but the files that go into a release.
-strip --strip-all "${CARGO_TARGET_DIR:-target}/release/$NAME" -o "build/$NAME"
+# dist/ holds nothing but the files that go into a release.
+strip --strip-all "$BIN_DIR/$NAME" -o "$WORK/$NAME"
 
 # The layout the tarball and the AppImage share.
-STAGE="build/$NAME-$VERSION"
+STAGE="$WORK/$NAME-$VERSION"
 mkdir -p "$STAGE"
-install -m 0755 "build/$NAME" "$STAGE/$NAME"
+install -m 0755 "$WORK/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
 
-tar -czf "$DIST/$NAME-$VERSION-$TRIPLE.tar.gz" -C build "$(basename "$STAGE")"
+tar -czf "$DIST/$NAME-$VERSION-$TRIPLE.tar.gz" -C "$WORK" "$NAME-$VERSION"
 
-# The distribution packages. nfpm reads the architecture and the version from
-# the environment, so run it once per format.
-ARCH="$DEB_ARCH" VERSION="$VERSION" nfpm package -f packaging/nfpm.yaml -p deb \
-  -t "$DIST/${NAME}_${VERSION}_${DEB_ARCH}.deb"
-ARCH="$RPM_ARCH" VERSION="$VERSION" nfpm package -f packaging/nfpm.yaml -p rpm \
-  -t "$DIST/$NAME-$VERSION-1.$RPM_ARCH.rpm"
+# The distribution packages. nfpm reads the architecture, the version and the
+# binary location from the environment, so run it once per format. The binary
+# lives in the work directory, so its path is substituted into a copy of the
+# config: nfpm expands environment variables only in the version and the arch.
+CONFIG="$WORK/nfpm.yaml"
+sed "s|src: build/ai-translator|src: $WORK/ai-translator|" packaging/nfpm.yaml > "$CONFIG"
+ARCH="$DEB_ARCH" VERSION="$VERSION" nfpm package \
+  -f "$CONFIG" -p deb -t "$DIST/${NAME}_${VERSION}_${DEB_ARCH}.deb"
+ARCH="$RPM_ARCH" VERSION="$VERSION" nfpm package \
+  -f "$CONFIG" -p rpm -t "$DIST/$NAME-$VERSION-1.$RPM_ARCH.rpm"
 
 # The AppImage. appimagetool is fetched rather than installed because no
 # distribution packages it; --appimage-extract-and-run works without FUSE.
-if [ ! -x build/appimagetool ]; then
-  curl -fsSL -o build/appimagetool \
+if [ ! -x "$WORK/appimagetool" ]; then
+  curl -fsSL -o "$WORK/appimagetool" \
     "https://github.com/AppImage/appimagetool/releases/latest/download/appimagetool-x86_64.AppImage"
-  chmod +x build/appimagetool
+  chmod +x "$WORK/appimagetool"
 fi
 
-APPDIR=build/AppDir
-rm -rf "$APPDIR"
+APPDIR="$WORK/AppDir"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/$NAME"
-install -m 0755 "build/$NAME" "$APPDIR/usr/bin/$NAME"
+install -m 0755 "$WORK/$NAME" "$APPDIR/usr/bin/$NAME"
 cp -r examples "$APPDIR/usr/share/$NAME/examples"
 cp packaging/ai-translator.desktop "$APPDIR/$NAME.desktop"
 cp assets/icon.png "$APPDIR/$NAME.png"
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
-# The application reads its configuration from the path given on the command
-# line, so the wrapper only has to find the binary inside the image.
+# The application takes its configuration on the command line, so the wrapper
+# only has to find the binary inside the image.
 exec "$APPDIR/usr/bin/ai-translator" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
-ARCH=x86_64 build/appimagetool --appimage-extract-and-run -n \
+ARCH=x86_64 "$WORK/appimagetool" --appimage-extract-and-run -n \
   "$APPDIR" "$DIST/$NAME-$VERSION-x86_64.AppImage"
 
-echo "== artefacts =="
+echo "== artefacts in $DIST =="
 ls -la "$DIST"

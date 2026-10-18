@@ -1,0 +1,30 @@
+# The Linux packages must be built on an ordinary distribution: a binary built
+# by the Nix flake keeps a /nix/store interpreter and does not start anywhere
+# else. 24.04 rather than 22.04, because libspa-sys generates its bindings from
+# the system PipeWire headers and needs PipeWire 1.0 (22.04 ships 0.3.48).
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config \
+        libpipewire-0.3-dev libasound2-dev libclang-dev \
+        gzip curl ca-certificates xz-utils file \
+    && rm -rf /var/lib/apt/lists/*
+
+# bindgen searches for libclang.so in a short list of paths; point it at the
+# versioned LLVM directory Ubuntu keeps it in.
+RUN ln -sf "$(find /usr/lib/llvm-*/lib -maxdepth 1 -name 'libclang.so' -print -quit)" \
+        /usr/lib/libclang.so
+ENV LIBCLANG_PATH=/usr/lib/llvm-18/lib
+
+# Pinned: the tree needs 1.95 for non-empty-slice and friends.
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.95.0
+ENV PATH=/root/.cargo/bin:$PATH
+
+# nfpm writes both the .deb and the .rpm and no distribution packages it.
+RUN curl -fsSL -o /tmp/nfpm.tgz \
+      https://github.com/goreleaser/nfpm/releases/download/v2.46.3/nfpm_2.46.3_Linux_x86_64.tar.gz \
+    && tar -xzf /tmp/nfpm.tgz -C /usr/local/bin nfpm \
+    && rm /tmp/nfpm.tgz
+
+WORKDIR /src

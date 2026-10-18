@@ -40,6 +40,8 @@ target
 *.rpm
 *.AppImage
 *.dmg
+# ...but the disk image builder is a Dockerfile, not an artefact
+!packaging/Dockerfile.dmg
 
 # Editor and OS files
 /.idea

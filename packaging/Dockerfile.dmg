@@ -1,0 +1,16 @@
+# Wraps a directory into an unsigned UDIF disk image on Linux. hfsprogs makes
+# the HFS+ filesystem, libdmg-hfsplus writes the image; hdiutil exists only on
+# macOS, so packaging/build-all.sh uses this container for the .dmg files.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git cmake build-essential zlib1g-dev libbz2-dev \
+        hfsprogs ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/fanquake/libdmg-hfsplus /tmp/libdmg \
+    && cmake -S /tmp/libdmg -B /tmp/libdmg/build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/libdmg/build -j"$(nproc)" \
+    && install -m 0755 /tmp/libdmg/build/dmg/dmg /usr/local/bin/dmg \
+    && rm -rf /tmp/libdmg
