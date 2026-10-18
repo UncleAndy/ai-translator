@@ -659,4 +659,23 @@ mod tests {
             Config::load(std::path::Path::new("/nonexistent/ai-translator.toml")).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
+
+    #[test]
+    fn the_all_example_parses_and_matches_the_schema() {
+        let cfg: Config = toml::from_str(include_str!("../examples/config.all.toml")).unwrap();
+
+        // Файл-справочник обязан содержать каждый тип приёмника: переименование
+        // поля уронит этот тест вместе с примером.
+        assert_eq!(
+            cfg.sink.text.len(),
+            4,
+            "console, websocket, transcript и webhook"
+        );
+        assert_eq!(cfg.sink.voice.len(), 1, "virtual_sink");
+        assert!(
+            cfg.validate().is_empty(),
+            "пример должен проходить проверку: {:?}",
+            cfg.validate()
+        );
+    }
 }
