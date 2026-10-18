@@ -93,6 +93,15 @@ pub fn build_voice_sink(id: &str, cfg: &VoiceSinkConfig) -> Result<Box<dyn Voice
             monitor_original,
             ..
         } => Ok(Box::new(VirtualSink::new(id, device, *monitor_original)?)),
+        VoiceSinkConfig::TelegramCall { .. } => Err(SinkError::Unavailable(
+            if crate::config::telegram_call_supported() {
+                "трансляция в голосовой чат ещё не подключена в этой ревизии"
+            } else {
+                "эта сборка не умеет транслировать в голосовой чат: \
+                 платформа или архитектура не поддерживается"
+            }
+            .into(),
+        )),
     }
 }
 

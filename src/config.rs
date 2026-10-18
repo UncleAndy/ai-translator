@@ -190,6 +190,28 @@ pub enum VoiceSinkConfig {
         #[serde(default)]
         monitor_original: f32,
     },
+    /// Broadcast the translated speech into a Telegram voice chat, as a user
+    /// account: a bot cannot join a group call, so this needs `api_id`,
+    /// `api_hash` and a session of a real account.
+    TelegramCall {
+        /// Whether the sink is enabled.
+        #[serde(default = "yes")]
+        enabled: bool,
+        /// Group whose voice chat carries the broadcast: a number or `@name`.
+        chat_id: String,
+        /// Name of the environment variable holding the `api_id` from my.telegram.org.
+        #[serde(default = "default_telegram_api_id_env")]
+        api_id_env: String,
+        /// Name of the environment variable holding the `api_hash`.
+        #[serde(default = "default_telegram_api_hash_env")]
+        api_hash_env: String,
+        /// File with the saved account session, written by `telegram-login`.
+        #[serde(default = "default_telegram_session_file")]
+        session_file: String,
+        /// Start the voice chat when the group has none active.
+        #[serde(default = "yes")]
+        create_if_missing: bool,
+    },
 }
 
 impl VoiceSinkConfig {
@@ -197,6 +219,7 @@ impl VoiceSinkConfig {
     pub fn enabled(&self) -> bool {
         match self {
             VoiceSinkConfig::VirtualSink { enabled, .. } => *enabled,
+            VoiceSinkConfig::TelegramCall { enabled, .. } => *enabled,
         }
     }
 
@@ -204,6 +227,7 @@ impl VoiceSinkConfig {
     pub fn kind(&self) -> &'static str {
         match self {
             VoiceSinkConfig::VirtualSink { .. } => "virtual_sink",
+            VoiceSinkConfig::TelegramCall { .. } => "telegram_call",
         }
     }
 }
@@ -383,6 +407,46 @@ impl Config {
                         });
                     }
                 }
+                VoiceSinkConfig::TelegramCall {
+                    chat_id,
+                    api_id_env,
+                    api_hash_env,
+                    session_file,
+                    ..
+                } => {
+                    if !telegram_call_supported() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.voice.telegram_call".into(),
+                            reason: "эта сборка не умеет транслировать в голосовой чат: \
+                                     платформа или архитектура не поддерживается"
+                                .into(),
+                        });
+                        continue;
+                    }
+
+                    if chat_id.trim().is_empty() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.voice.telegram_call.chat_id".into(),
+                            reason: "пустое значение".into(),
+                        });
+                    }
+                    if session_file.trim().is_empty() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.voice.telegram_call.session_file".into(),
+                            reason: "пустое значение".into(),
+                        });
+                    }
+                    for name in [api_id_env, api_hash_env] {
+                        if name.trim().is_empty() {
+                            problems.push(ConfigProblem::Invalid {
+                                field: "sink.voice.telegram_call".into(),
+                                reason: "пустое имя переменной окружения".into(),
+                            });
+                        } else if std::env::var(name).is_err() {
+                            problems.push(ConfigProblem::MissingEnv(name.clone()));
+                        }
+                    }
+                }
             }
         }
 
@@ -402,6 +466,17 @@ impl Config {
 
 fn yes() -> bool {
     true
+}
+
+/// Whether this build carries the live broadcast into a Telegram voice chat.
+///
+/// The feature is off by default and on only for the targets that ship the
+/// native media engine: Linux x86_64, Linux arm64 and macOS arm64. A build
+/// without it still parses the sink in the configuration and then refuses it
+/// with this explanation, so a copy of the configuration on an unsupported
+/// machine says why instead of silently dropping the translation.
+pub const fn telegram_call_supported() -> bool {
+    cfg!(feature = "telegram-call")
 }
 
 fn default_provider() -> String {
@@ -428,6 +503,26 @@ fn default_telegram_max_sends() -> u32 {
 /// One edit per second: enough for the phrase to grow visibly, mild for Telegram.
 fn default_telegram_edit_interval_ms() -> u64 {
     1000
+}
+
+/// `api_id` of the Telegram application, from my.telegram.org.
+fn default_telegram_api_id_env() -> String {
+    "TELEGRAM_API_ID".to_string()
+}
+
+/// `api_hash` of the same application.
+fn default_telegram_api_hash_env() -> String {
+    "TELEGRAM_API_HASH".to_string()
+}
+
+/// Where the account session is kept once `telegram-login` has signed in.
+fn default_telegram_session_file() -> String {
+    let base = std::env::var("XDG_STATE_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{home}/.local/state")
+    });
+
+    format!("{base}/ai-translator/telegram-user.session")
 }
 
 fn default_bind() -> String {
@@ -843,11 +938,103 @@ mod tests {
             5,
             "console, websocket, transcript, telegram и webhook"
         );
-        assert_eq!(cfg.sink.voice.len(), 1, "virtual_sink");
+        assert_eq!(cfg.sink.voice.len(), 2, "virtual_sink и telegram_call");
+        let kinds: Vec<&str> = cfg.sink.voice.iter().map(|sink| sink.kind()).collect();
+        assert_eq!(kinds, ["virtual_sink", "telegram_call"]);
         assert!(
             cfg.validate().is_empty(),
             "пример должен проходить проверку: {:?}",
             cfg.validate()
+        );
+    }
+
+    #[test]
+    fn telegram_call_sink_is_parsed_with_its_defaults() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.voice]]
+            type = "telegram_call"
+            chat_id = "-1001234567890"
+            "#,
+        )
+        .expect("конфигурация разбирается");
+
+        let VoiceSinkConfig::TelegramCall {
+            enabled,
+            chat_id,
+            api_id_env,
+            api_hash_env,
+            session_file,
+            create_if_missing,
+        } = &cfg.sink.voice[0]
+        else {
+            panic!("ожидался приёмник telegram_call");
+        };
+
+        assert!(enabled, "приёмник включён, если не сказано иное");
+        assert_eq!(chat_id, "-1001234567890");
+        assert_eq!(api_id_env, "TELEGRAM_API_ID");
+        assert_eq!(api_hash_env, "TELEGRAM_API_HASH");
+        assert!(
+            session_file.ends_with("ai-translator/telegram-user.session"),
+            "сессия лежит в каталоге состояния: {session_file}"
+        );
+        assert!(*create_if_missing, "звонок создаётся, если его нет");
+    }
+
+    #[cfg(not(feature = "telegram-call"))]
+    #[test]
+    fn a_build_without_the_call_feature_refuses_the_sink() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.voice]]
+            type = "telegram_call"
+            chat_id = "-1001234567890"
+            "#,
+        )
+        .expect("конфигурация разбирается: отказ — дело проверки, а не разбора");
+
+        let problems = cfg.validate();
+        assert!(
+            problems.iter().any(|problem| matches!(
+                problem,
+                ConfigProblem::Invalid { field, reason }
+                    if field == "sink.voice.telegram_call"
+                        && reason.contains("не умеет транслировать")
+            )),
+            "сборка без трансляции обязана объяснить отказ: {problems:?}"
+        );
+    }
+
+    #[cfg(feature = "telegram-call")]
+    #[test]
+    fn a_build_with_the_call_feature_asks_for_the_account() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.voice]]
+            type = "telegram_call"
+            chat_id = "-1001234567890"
+            api_id_env = "AI_TRANSLATOR_MISSING_API_ID"
+            "#,
+        )
+        .expect("конфигурация разбирается");
+
+        let problems = cfg.validate();
+        assert!(
+            problems.iter().any(|problem| matches!(
+                problem,
+                ConfigProblem::MissingEnv(name) if name == "AI_TRANSLATOR_MISSING_API_ID"
+            )),
+            "нужен api_id: {problems:?}"
         );
     }
 }

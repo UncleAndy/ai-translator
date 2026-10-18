@@ -111,6 +111,33 @@ Translated speech comes from the AI provider itself as part of the same session 
 the translated text. Speech synthesis (TTS) is an optional additional source of audio, used
 only when a provider or a source does not produce speech of its own.
 
+### Live broadcast into a Telegram voice chat
+
+A group can carry the translation as live audio inside its voice chat. That path is not the
+Bot API: a bot cannot join a voice chat at all, so the broadcast runs as a user account with
+`api_id`, `api_hash` and a saved session.
+
+```toml
+[[sink.voice]]
+type = "telegram_call"
+chat_id = "-1001234567890"
+api_id_env = "TELEGRAM_API_ID"
+api_hash_env = "TELEGRAM_API_HASH"
+session_file = "~/.local/state/ai-translator/telegram-user.session"
+create_if_missing = true
+```
+
+The account signs in once with `ai-translator telegram-login`; the session file is a full
+access credential and is treated as a secret. Speech is fed to the call frame by frame from
+the same pipeline that feeds the text sinks, so the group hears the translation as it is
+spoken.
+
+The transport is a native media engine (`libntgcalls`, the one behind pytgcalls), so this sink
+is a build feature, `telegram-call`, enabled only for the targets with a prebuilt engine:
+Linux x86_64, Linux arm64 and macOS arm64. Every other target — including macOS x86_64 —
+is built without the feature and stays pure Rust; the sink still parses there, and an enabled
+one is refused by the configuration check with the reason, instead of disappearing silently.
+
 ## Configuration
 
 One TOML file describes the core and every sink. Each sink has a `type` and an `enabled`
