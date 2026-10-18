@@ -11,6 +11,14 @@ nix shell nixpkgs#gh -c gh release create v0.1.0 --verify-tag --generate-notes d
 
 Первая собирает всё в `dist/` и кладёт туда же `SHA256SUMS`. Вторая создаёт релиз с уже существующего тега и прикладывает к нему файлы из `dist/` — имя тега обязано совпадать с версией в `Cargo.toml`.
 
+Вариант с живой трансляцией в голосовой чат Telegram собирается той же командой с указанием фичи — движок (статическая сборка `libntgcalls`) влинковывается в бинарник, поэтому пакеты отличаются только размером и самой функцией:
+
+```sh
+FEATURES=telegram-call bash packaging/build-all.sh
+```
+
+Для этого варианта в образе сборки нужен `zlib1g-dev` (он уже добавлен в `packaging/Dockerfile.linux`), а под NixOS локальная сборка требует `RUSTFLAGS="-L $(nix eval --raw nixpkgs#zlib.outPath)/lib"`.
+
 Тег ставится отдельно, до публикации:
 
 ```sh

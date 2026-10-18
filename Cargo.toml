@@ -52,7 +52,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Media engine of the Telegram voice-chat sink: a native WebRTC/DTLS-SRTP library,
 # hence optional and reachable only through the `telegram-call` feature. The
-# library itself is fetched per target by packaging/fetch-ntgcalls.sh.
+# library itself (a static build for the target) is downloaded by its own build
+# script and linked into the binary, so nothing has to be shipped beside it.
 ntgcalls = { version = "3.0.4", optional = true }
 # MTProto side of the same sink: the account signs in once, and the phone.* methods
 # that create and join a voice chat are called through these crates.

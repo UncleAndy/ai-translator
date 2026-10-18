@@ -57,6 +57,7 @@ docker run --rm \
   -e CARGO_TARGET_DIR=/work/ai-translator/build/linux/target \
   -e DIST=/work/ai-translator/build/linux/dist \
   -e WORK=/work/ai-translator/build/linux/work \
+  -e FEATURES="${FEATURES:-}" \
   "$LINUX_IMAGE" bash packaging/build-linux.sh
 
 # The tree is mounted with its sibling transono: ai-translator depends on it

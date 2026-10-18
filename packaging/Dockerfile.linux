@@ -7,8 +7,8 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config \
-        libpipewire-0.3-dev libasound2-dev libclang-dev \
-        gzip curl ca-certificates xz-utils file \
+        libpipewire-0.3-dev libasound2-dev libclang-dev zlib1g-dev \
+        gzip curl ca-certificates xz-utils file unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # bindgen searches for libclang.so in a short list of paths; point it at the

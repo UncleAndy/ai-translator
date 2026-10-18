@@ -8,7 +8,10 @@
 # needs PipeWire 1.0. The binary wants libpipewire-0.3-0 >= 1.0 at run time
 # (Ubuntu 24.04+, Debian 13+, Fedora 40+) and no glibc newer than 2.34.
 #
-# Environment: DIST (default dist), WORK (default build), CARGO_TARGET_DIR.
+# Environment: DIST (default dist), WORK (default build), CARGO_TARGET_DIR,
+# FEATURES (default empty; `telegram-call` adds the live voice-chat sink; that
+# build links the media engine statically, so nothing extra ships beside the
+# binary and no new runtime dependency appears).
 # Needs: cargo, strip, tar, gzip, curl, nfpm on PATH.
 set -euo pipefail
 
@@ -20,6 +23,7 @@ RPM_ARCH=x86_64
 TRIPLE=x86_64-linux
 DIST="${DIST:-dist}"
 WORK="${WORK:-build}"
+FEATURES="${FEATURES:-}"
 # The version comes from Cargo.toml, not from the environment: build images
 # define VERSION for their own purposes.
 VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
@@ -28,7 +32,12 @@ BIN_DIR="${CARGO_TARGET_DIR:-target}/release"
 echo "== ai-translator $VERSION =="
 test -n "$VERSION"
 
-cargo build --release --locked
+BUILD_ARGS=(--release --locked)
+if [ -n "$FEATURES" ]; then
+  BUILD_ARGS+=(--features "$FEATURES")
+fi
+
+cargo build "${BUILD_ARGS[@]}"
 
 rm -rf "$DIST" "$WORK"
 mkdir -p "$DIST" "$WORK"
