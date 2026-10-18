@@ -14,7 +14,7 @@ input_device = "default"
 type = "console"
 enabled = true
 
-# Страница большого экрана: откройте http://127.0.0.1:8642/
+# Страница большого экрана: откройте http://127.0.0.1:8643/
 [[sink.text]]
 type = "websocket"
 enabled = true
