@@ -148,6 +148,10 @@ The provider key is read from `OPENAI_API_KEY`; a `.env` file next to the projec
 automatically. `check` exits with a non-zero code when the configuration is not usable.
 Logs go to stderr, the translation itself to stdout.
 
+`Ctrl+C` — or `SIGTERM` when the program runs as a service — stops the run properly: the
+phrase in progress is written out, connections are closed and files are saved. A second
+`Ctrl+C` exits at once, for a shutdown that will not finish on its own.
+
 Tests and lints:
 
 ```bash

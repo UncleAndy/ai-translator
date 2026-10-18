@@ -148,8 +148,16 @@ async fn script(path: &std::path::Path, text: &str) -> ExitCode {
 
     println!("приёмники: {}", app.sink_ids().join(", "));
 
-    let published = app.publish_text(&cfg, text).await;
-    println!("опубликовано событий: {published}");
+    // Прерывание прогона останавливает публикацию, но не отменяет остановку:
+    // уже поданный текст должен дойти до приёмников и попасть в файл.
+    tokio::select! {
+        published = app.publish_text(&cfg, text) => {
+            println!("опубликовано событий: {published}");
+        }
+        () = wait_for_stop() => {
+            println!("прогон прерван");
+        }
+    }
 
     if let Err(error) = app.shutdown().await {
         eprintln!("{error}");
@@ -167,9 +175,12 @@ fn load(path: &std::path::Path) -> Result<Config, ExitCode> {
     })
 }
 
-/// Wait for Ctrl+C; a second signal ends the process at once.
+/// Wait for a stop signal: Ctrl+C or SIGTERM.
+///
+/// A second Ctrl+C ends the process at once: if the shutdown drags on (an
+/// external service is not answering), waiting for it forever is not an option.
 async fn wait_for_stop() {
-    if tokio::signal::ctrl_c().await.is_err() {
+    if stop_signal().await.is_err() {
         return;
     }
 
@@ -181,6 +192,20 @@ async fn wait_for_stop() {
             std::process::exit(130);
         }
     });
+}
+
+/// Resolve when the process is asked to stop.
+///
+/// SIGTERM is the standard stop signal of a service, so it must flush the
+/// translation the same way Ctrl+C does. The handlers are released when this
+/// future ends, so a repeated SIGTERM still kills a stuck process.
+async fn stop_signal() -> std::io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
 }
 
 /// Log to stderr, leaving stdout to the translation itself.
