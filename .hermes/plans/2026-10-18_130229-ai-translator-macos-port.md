@@ -596,11 +596,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Только библиотека: бинарник transonovirt управляет устройствами PipeWire
-      # и по своей природе Linux-only (см. задачу 2), в кросс-проверку не входит.
-      - run: cargo build --lib
+      # Бинарники тоже: transonovirt управляет устройствами PipeWire и по своей
+      # природе Linux-only, поэтому под darwin он сведён к заглушке (задача 4).
+      # Сборка бинарников не даёт Linux-only импорту вернуться незамеченным —
+      # проверка --lib его не увидит.
+      - run: cargo build --bins
       - run: cargo test --lib
 ```
+
+**Обновлено 18 октября 2026, коммит `b8f11fb`:** задание `macos` собирает и бинарники (`--bins` вместо `--lib`) — после задачи 4 они собираются под darwin, а `--lib` не увидел бы Linux-only импорт в бинарнике. YAML проверен `yamllint` (exit=0; единственное предупреждение о длине строки — в строке `apt-get`, было до правки). Настоящий прогон — по первому push.
 
 **Файл 2: `ai-translator/.github/workflows/ci.yml`**
 
