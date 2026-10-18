@@ -20,7 +20,7 @@ use transono::providers::openai::translation::{
     OpenAITranslationConfig, OpenAITranslationProvider,
 };
 
-use crate::bus::{EventBus, LangPair, Language, LineId};
+use crate::bus::{EventBus, LangPair, LineId};
 use crate::config::CoreConfig;
 use crate::core_glue::adapt::EventAdapter;
 use crate::core_glue::line::EventBridge;
@@ -156,16 +156,7 @@ fn build_provider(cfg: &CoreConfig) -> Result<OpenAITranslationProvider, SourceE
 
 /// Language pair of the line.
 fn langs(cfg: &CoreConfig) -> LangPair {
-    let source = if cfg.source_lang == "auto" {
-        Language::Auto
-    } else {
-        Language::code(&cfg.source_lang)
-    };
-
-    LangPair {
-        source: Some(source),
-        target: Language::code(&cfg.target_lang),
-    }
+    crate::source::lang_pair(cfg)
 }
 
 #[cfg(test)]
@@ -213,16 +204,5 @@ mod tests {
             }
             Err(other) => panic!("неожиданная ошибка: {other:?}"),
         }
-    }
-
-    #[test]
-    fn language_pair_follows_the_configuration() {
-        let pair = langs(&config("openai/translation"));
-        assert_eq!(pair.source, Some(Language::Auto));
-        assert_eq!(pair.target, Language::code("ru"));
-
-        let mut cfg = config("openai/translation");
-        cfg.source_lang = "en".to_string();
-        assert_eq!(langs(&cfg).source, Some(Language::code("en")));
     }
 }

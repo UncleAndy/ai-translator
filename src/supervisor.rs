@@ -119,7 +119,11 @@ impl SinkKind {
 }
 
 /// Builds a fresh sink instance, used on start and on every restart.
-type SinkFactory = Arc<dyn Fn() -> SinkKind + Send + Sync>;
+///
+/// The factory can fail: an address may be taken, a file may be unwritable.
+/// Such a failure is handled like a sink failure — the restart policy decides
+/// whether to try again — instead of panicking inside the sink task.
+type SinkFactory = Arc<dyn Fn() -> Result<SinkKind> + Send + Sync>;
 
 /// What the supervisor knows about one sink.
 struct SinkHandle {
@@ -163,17 +167,17 @@ impl Supervisor {
     /// a fresh sink each time.
     pub fn spawn<F>(&self, id: &str, factory: F)
     where
-        F: Fn() -> Box<dyn TextSink> + Send + Sync + 'static,
+        F: Fn() -> Result<Box<dyn TextSink>> + Send + Sync + 'static,
     {
-        self.spawn_kind(id, Arc::new(move || SinkKind::Text(factory())));
+        self.spawn_kind(id, Arc::new(move || factory().map(SinkKind::Text)));
     }
 
     /// Start a voice sink built by `factory`.
     pub fn spawn_voice<F>(&self, id: &str, factory: F)
     where
-        F: Fn() -> Box<dyn VoiceSink> + Send + Sync + 'static,
+        F: Fn() -> Result<Box<dyn VoiceSink>> + Send + Sync + 'static,
     {
-        self.spawn_kind(id, Arc::new(move || SinkKind::Voice(factory())));
+        self.spawn_kind(id, Arc::new(move || factory().map(SinkKind::Voice)));
     }
 
     /// Deliver an event to every sink.
@@ -284,28 +288,39 @@ async fn run_sink(
     let mut attempt = 0;
 
     loop {
-        let mut sink = factory();
-        starts.fetch_add(1, Ordering::Relaxed);
-        *state.lock().expect("состояние приёмника повреждено") = SinkState::Running;
+        let (outcome, handled) = match factory() {
+            Ok(mut sink) => {
+                starts.fetch_add(1, Ordering::Relaxed);
+                *state.lock().expect("состояние приёмника повреждено") = SinkState::Running;
 
-        // Хотя бы одно обработанное событие означает, что приёмник ожил: тогда
-        // счётчик попыток считает только подряд идущие отказы.
-        let mut handled = false;
+                // Хотя бы одно обработанное событие означает, что приёмник ожил:
+                // тогда счётчик попыток считает только подряд идущие отказы.
+                let mut handled = false;
 
-        let outcome = loop {
-            tokio::select! {
-                _ = stop.changed() => break Ok(()),
-                event = subscriber.recv() => match event {
-                    Some(event) => match sink.feed(&event).await {
-                        Ok(()) => handled = true,
-                        Err(error) => break Err(error.to_string()),
-                    },
-                    None => break Ok(()),
-                },
+                let outcome = loop {
+                    tokio::select! {
+                        _ = stop.changed() => {
+                            drain(&mut sink, &mut subscriber).await;
+                            break Ok(());
+                        }
+                        event = subscriber.recv() => match event {
+                            Some(event) => match sink.feed(&event).await {
+                                Ok(()) => handled = true,
+                                Err(error) => break Err(error.to_string()),
+                            },
+                            None => break Ok(()),
+                        },
+                    }
+                };
+
+                let _ = sink.shutdown().await;
+                (outcome, handled)
+            }
+            Err(error) => {
+                tracing::warn!(sink = %id, "приёмник не собран: {error}");
+                (Err(error.to_string()), false)
             }
         };
-
-        let _ = sink.shutdown().await;
 
         match outcome {
             Ok(()) => {
@@ -331,6 +346,20 @@ async fn run_sink(
                 tracing::warn!(sink = %id, "приёмник перезапускается: {reason}");
                 attempt = restart(&id, &state, policy, attempt).await;
             }
+        }
+    }
+}
+
+/// Hand the sink everything already queued, ignoring further failures.
+///
+/// Called on the way out: without it the events that were published but not
+/// yet delivered — the tail of a run — would be dropped at shutdown.
+async fn drain(sink: &mut SinkKind, subscriber: &mut Subscriber) {
+    // Пустая очередь и закрытый подписчик означают одно: дописывать нечего.
+    while let Ok(event) = subscriber.try_recv() {
+        if let Err(error) = sink.feed(&event).await {
+            tracing::warn!("приёмник отказал при остановке, очередь не дописана: {error}");
+            break;
         }
     }
 }
@@ -481,10 +510,10 @@ mod tests {
         );
 
         let seen = Arc::new(AtomicUsize::new(0));
-        supervisor.spawn("always-fails", || Box::new(AlwaysFails));
+        supervisor.spawn("always-fails", || Ok(Box::new(AlwaysFails)));
         supervisor.spawn("healthy", {
             let seen = seen.clone();
-            move || Box::new(CountingSink::new("healthy", seen.clone()))
+            move || Ok(Box::new(CountingSink::new("healthy", seen.clone())))
         });
 
         // Падающий приёмник получает событие на каждый перезапуск: без нового
@@ -518,7 +547,7 @@ mod tests {
     async fn restart_is_limited_and_the_factory_is_called_again() {
         let bus = EventBus::new();
         let supervisor = Supervisor::new(bus, RestartPolicy::limited(2, Duration::from_millis(10)));
-        supervisor.spawn("always-fails", || Box::new(AlwaysFails));
+        supervisor.spawn("always-fails", || Ok(Box::new(AlwaysFails)));
 
         for seq in 1..=4 {
             supervisor.publish(translated("привет", true, seq));
@@ -547,10 +576,10 @@ mod tests {
         supervisor.spawn("scripted", {
             let calls = calls.clone();
             move || {
-                Box::new(ScriptedSink {
+                Ok(Box::new(ScriptedSink {
                     calls: calls.clone(),
                     fail_on: vec![0, 2],
-                })
+                }))
             }
         });
 
@@ -576,7 +605,7 @@ mod tests {
     async fn policy_without_attempts_fails_at_once() {
         let bus = EventBus::new();
         let supervisor = Supervisor::new(bus, RestartPolicy::none());
-        supervisor.spawn("always-fails", || Box::new(AlwaysFails));
+        supervisor.spawn("always-fails", || Ok(Box::new(AlwaysFails)));
 
         supervisor.publish(translated("привет", true, 1));
         wait_until(&supervisor, "always-fails", SinkState::is_error).await;
@@ -591,7 +620,7 @@ mod tests {
         let seen = Arc::new(AtomicUsize::new(0));
         supervisor.spawn("counter", {
             let seen = seen.clone();
-            move || Box::new(CountingSink::new("counter", seen.clone()))
+            move || Ok(Box::new(CountingSink::new("counter", seen.clone())))
         });
 
         wait_until(&supervisor, "counter", SinkState::is_running).await;
@@ -612,6 +641,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_factory_that_cannot_build_the_sink_is_retried_and_reported() {
+        let bus = EventBus::new();
+        let supervisor = Supervisor::new(bus, RestartPolicy::limited(1, Duration::from_millis(10)));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        supervisor.spawn("broken", {
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(SinkError::Unavailable("адрес занят".into()))
+            }
+        });
+
+        let state = wait_until(&supervisor, "broken", SinkState::is_error).await;
+        assert!(
+            matches!(state, SinkState::Error(ref reason) if reason.contains("адрес занят")),
+            "{state:?}"
+        );
+        assert_eq!(
+            supervisor.starts_of("broken"),
+            0,
+            "неудачная сборка запуском не считается"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "после отказа фабрика вызвана снова"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_delivers_the_events_already_queued() {
+        let bus = EventBus::new();
+        let mut supervisor = Supervisor::new(bus, RestartPolicy::none());
+        let seen = Arc::new(AtomicUsize::new(0));
+        supervisor.spawn("counter", {
+            let seen = seen.clone();
+            move || Ok(Box::new(CountingSink::new("counter", seen.clone())))
+        });
+
+        wait_until(&supervisor, "counter", SinkState::is_running).await;
+
+        // Публикуем и сразу останавливаемся: события уже в очереди приёмника,
+        // и на выходе он должен их дописать, а не потерять.
+        for seq in 1..=3 {
+            supervisor.publish(translated("привет", true, seq));
+        }
+        supervisor.shutdown().await;
+
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            3,
+            "очередь дописана перед остановкой"
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_sink_is_reported_as_unknown() {
         let bus = EventBus::new();
         let supervisor = Supervisor::new(bus, RestartPolicy::none());
@@ -626,7 +712,10 @@ mod tests {
         let bus = EventBus::new();
         let mut supervisor = Supervisor::new(bus, RestartPolicy::none());
         supervisor.spawn("counter", || {
-            Box::new(CountingSink::new("counter", Arc::new(AtomicUsize::new(0))))
+            Ok(Box::new(CountingSink::new(
+                "counter",
+                Arc::new(AtomicUsize::new(0)),
+            )))
         });
 
         wait_until(&supervisor, "counter", SinkState::is_running).await;
