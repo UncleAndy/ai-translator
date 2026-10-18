@@ -19,6 +19,21 @@ console, WebSocket and transcript sinks, the supervisor, the audio source on the
 translation provider, the offline text and scripted sources, and the command-line interface.
 Interfaces may still change before the 1.0 release.
 
+## Platforms
+
+Linux is the primary platform: the Nix flake provides the development shell, `transono`
+drives PipeWire and ALSA, and virtual audio devices are created through its PipeWire module.
+
+macOS is supported for building and running: the project builds with Xcode Command Line Tools
+and a rustup toolchain, without Nix; audio capture and playback go through CoreAudio via
+`cpal`, and the PipeWire module of `transono` is not compiled at all. The voice sink is
+unavailable there — a virtual audio device is a third-party driver the user installs — and the
+microphone permission is asked from the terminal. Both platforms are built and tested by CI on
+every push.
+
+Windows is not supported: the audio control backend there is an unfinished stub, and the
+project has never been tried on it.
+
 ## Architecture
 
 ```
