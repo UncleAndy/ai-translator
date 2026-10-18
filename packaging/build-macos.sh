@@ -32,19 +32,22 @@ cargo build --release --locked --target "$AIT_TARGET"
 rm -rf "$DIST" build
 mkdir -p "$DIST" build
 
-BIN="target/$AIT_TARGET/release/$NAME"
-strip -x "$BIN" -o "$DIST/$NAME"
+BIN="${CARGO_TARGET_DIR:-target}/$AIT_TARGET/release/$NAME"
+# dist/ holds nothing but the files that go into a release: a bare binary there
+# would collide between the two architectures when the artefacts are unpacked
+# side by side.
+strip -x "$BIN" -o "build/$NAME"
 
 # arm64 refuses to start a binary without a signature, and stripping drops the
 # ad-hoc one the linker added, so sign again. This is not a Developer ID and
 # not notarisation: Gatekeeper still sees an unsigned application.
 if command -v codesign >/dev/null; then
-  codesign --force --sign - "$DIST/$NAME"
+  codesign --force --sign - "build/$NAME"
 fi
 
 STAGE="build/$NAME-$VERSION"
 mkdir -p "$STAGE"
-install -m 0755 "$DIST/$NAME" "$STAGE/$NAME"
+install -m 0755 "build/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
 
 tar -czf "$DIST/$NAME-$VERSION-$ARCH-macos.tar.gz" -C build "$(basename "$STAGE")"

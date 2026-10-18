@@ -31,13 +31,14 @@ cargo build --release --locked
 rm -rf "$DIST" build
 mkdir -p "$DIST" build
 
-# Strip into DIST so the binary in target/ stays untouched.
-strip --strip-all "target/release/$NAME" -o "$DIST/$NAME"
+# Strip into build/ so the binary in the target directory stays untouched, and
+# so that dist/ holds nothing but the files that go into a release.
+strip --strip-all "${CARGO_TARGET_DIR:-target}/release/$NAME" -o "build/$NAME"
 
 # The layout the tarball and the AppImage share.
 STAGE="build/$NAME-$VERSION"
 mkdir -p "$STAGE"
-install -m 0755 "$DIST/$NAME" "$STAGE/$NAME"
+install -m 0755 "build/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
 
 tar -czf "$DIST/$NAME-$VERSION-$TRIPLE.tar.gz" -C build "$(basename "$STAGE")"
@@ -60,7 +61,7 @@ fi
 APPDIR=build/AppDir
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/$NAME"
-install -m 0755 "$DIST/$NAME" "$APPDIR/usr/bin/$NAME"
+install -m 0755 "build/$NAME" "$APPDIR/usr/bin/$NAME"
 cp -r examples "$APPDIR/usr/share/$NAME/examples"
 cp packaging/ai-translator.desktop "$APPDIR/$NAME.desktop"
 cp assets/icon.png "$APPDIR/$NAME.png"

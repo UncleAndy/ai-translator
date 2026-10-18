@@ -22,7 +22,7 @@ depends:
   - libpipewire-0.3-0 (>= 1.0)
   - libasound2
 contents:
-  - src: dist/ai-translator
+  - src: build/ai-translator
     dst: /usr/bin/ai-translator
     file_info:
       mode: 0755
