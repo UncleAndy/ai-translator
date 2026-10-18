@@ -11,6 +11,7 @@ use super::text::telegram::{TelegramSink, TelegramSpec};
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
 use super::text::websocket::{ScreenSettings, WebsocketSink};
+use super::voice::telegram_voice::{TelegramVoiceSink, TelegramVoiceSpec};
 use super::voice::virtual_sink::VirtualSink;
 use super::{Result, SinkError, TextSink, VoiceSink};
 use crate::config::{TextSinkConfig, VoiceSinkConfig};
@@ -93,6 +94,25 @@ pub fn build_voice_sink(id: &str, cfg: &VoiceSinkConfig) -> Result<Box<dyn Voice
             monitor_original,
             ..
         } => Ok(Box::new(VirtualSink::new(id, device, *monitor_original)?)),
+        VoiceSinkConfig::Telegram {
+            chat_id,
+            token_env,
+            message_thread_id,
+            max_chunk_seconds,
+            gap_ms,
+            max_sends_per_minute,
+            ..
+        } => Ok(Box::new(TelegramVoiceSink::from_spec(
+            id,
+            TelegramVoiceSpec {
+                chat_id,
+                token_env,
+                thread: *message_thread_id,
+                max_chunk: Duration::from_secs(*max_chunk_seconds),
+                gap: Duration::from_millis(*gap_ms),
+                max_sends_per_minute: *max_sends_per_minute,
+            },
+        )?)),
     }
 }
 

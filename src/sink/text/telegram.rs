@@ -34,14 +34,13 @@
 //! part of the request URL, so every error message passes through
 //! [`reqwest::Error::without_url`] and the token never reaches a log line.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::bus::TranslationEvent;
+use crate::sink::rate::SendWindow;
 use crate::sink::{Result, SinkError, TextSink};
 
 /// Bot API root.
@@ -55,9 +54,6 @@ pub const DEFAULT_EDIT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How many new messages may be posted per minute by default.
 pub const DEFAULT_SENDS_PER_MINUTE: u32 = 20;
-
-/// The window the send limit counts over.
-pub const SEND_WINDOW: Duration = Duration::from_secs(60);
 
 /// How long a rate limit is waited out before the sink gives up.
 const RETRY_AFTER_LIMIT_SECS: u64 = 30;
@@ -141,98 +137,6 @@ impl TelegramSettings {
             thread: None,
             edit_interval: DEFAULT_EDIT_INTERVAL,
             max_sends_per_minute: DEFAULT_SENDS_PER_MINUTE,
-        }
-    }
-}
-
-/// Sliding window over the messages posted in the last minute.
-///
-/// Telegram counts every new message against a per-chat limit, and a phrase that
-/// arrives faster than the limit would be refused. The window holds the times of
-/// the messages already posted: a send is allowed while fewer than `limit` of
-/// them are younger than [`SEND_WINDOW`], otherwise it waits for the oldest to
-/// fall out of the window.
-struct SendWindow {
-    limit: usize,
-    window: Duration,
-    slots: Mutex<VecDeque<Instant>>,
-}
-
-/// Decision of [`SendWindow::plan`].
-#[derive(Debug, PartialEq, Eq)]
-enum Slot {
-    /// Send now; the slot is taken.
-    Now,
-    /// Wait this long, then ask again.
-    Wait(Duration),
-}
-
-impl SendWindow {
-    fn new(limit: u32) -> Self {
-        Self::with_window(limit, SEND_WINDOW)
-    }
-
-    /// A window of a custom length, for tests that must not wait a minute.
-    fn with_window(limit: u32, window: Duration) -> Self {
-        Self {
-            limit: limit as usize,
-            window,
-            slots: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    /// Take a slot if one is free at `now`.
-    fn plan(&self, now: Instant) -> Slot {
-        if self.limit == 0 {
-            return Slot::Now;
-        }
-
-        let mut slots = match self.slots.lock() {
-            Ok(slots) => slots,
-            // A poisoned window is not worth failing a translation over: let the
-            // message through and let Telegram decide.
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        while let Some(oldest) = slots.front() {
-            if now.saturating_duration_since(*oldest) >= self.window {
-                slots.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if slots.len() < self.limit {
-            slots.push_back(now);
-            return Slot::Now;
-        }
-
-        let oldest = slots.front().copied().unwrap_or(now);
-        Slot::Wait(
-            self.window
-                .saturating_sub(now.saturating_duration_since(oldest)),
-        )
-    }
-
-    /// Wait until a slot is free.
-    async fn acquire(&self) {
-        let mut announced = false;
-
-        loop {
-            match self.plan(Instant::now()) {
-                Slot::Now => return,
-                Slot::Wait(wait) => {
-                    if !announced {
-                        tracing::debug!(
-                            "предел {} сообщений в минуту: ждём {} мс",
-                            self.limit,
-                            wait.as_millis()
-                        );
-                        announced = true;
-                    }
-                    tokio::time::sleep(wait.max(Duration::from_millis(10))).await;
-                }
-            }
         }
     }
 }
@@ -753,53 +657,6 @@ mod tests {
     fn a_word_longer_than_the_limit_is_cut() {
         let pieces = split_message("abcdefghij", 4);
         assert_eq!(pieces, vec!["abcd", "efgh", "ij"]);
-    }
-
-    #[test]
-    fn the_send_limit_lets_the_first_messages_through_and_then_waits() {
-        let window = SendWindow::new(20);
-        let start = Instant::now();
-
-        for i in 0..20 {
-            let now = start + Duration::from_millis(i * 100);
-            assert_eq!(window.plan(now), Slot::Now, "сообщение {i} проходит сразу");
-        }
-
-        match window.plan(start + Duration::from_secs(2)) {
-            Slot::Wait(wait) => assert!(
-                wait > Duration::from_secs(50) && wait <= SEND_WINDOW,
-                "двадцать первое сообщение ждёт почти всю минуту: {wait:?}"
-            ),
-            other => panic!("двадцать первое сообщение должно ждать: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_slot_frees_up_when_the_oldest_message_leaves_the_minute() {
-        let window = SendWindow::new(2);
-        let start = Instant::now();
-
-        assert_eq!(window.plan(start), Slot::Now);
-        assert_eq!(window.plan(start + Duration::from_secs(1)), Slot::Now);
-        assert!(
-            matches!(window.plan(start + Duration::from_secs(2)), Slot::Wait(_)),
-            "третье сообщение ждёт"
-        );
-        assert_eq!(
-            window.plan(start + SEND_WINDOW + Duration::from_secs(1)),
-            Slot::Now,
-            "через минуту место освободилось"
-        );
-    }
-
-    #[test]
-    fn a_zero_send_limit_does_not_hold_anything_back() {
-        let window = SendWindow::new(0);
-        let start = Instant::now();
-
-        for i in 0..100 {
-            assert_eq!(window.plan(start + Duration::from_millis(i)), Slot::Now);
-        }
     }
 
     #[tokio::test]

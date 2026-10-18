@@ -5,6 +5,8 @@
 //! normalized events and deliver them to an external system. The bus already
 //! isolates a slow sink, so a sink implementation may simply do its work.
 
+/// Posting rate shared by the Telegram sinks.
+pub mod rate;
 /// Sink registry: building a sink from its configuration entry.
 pub mod registry;
 /// Text sinks: delivering the translated text.

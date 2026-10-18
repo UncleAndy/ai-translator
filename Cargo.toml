@@ -33,7 +33,11 @@ async-trait = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # HTTP client of the Telegram sink. rustls instead of the platform TLS stack:
 # the release binaries are built in a container, and rustls needs no OpenSSL.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+# Opus encoder with its Ogg container, in pure Rust: Telegram plays voice notes
+# only as OGG/Opus, and a pure-Rust codec keeps the release binaries free of a
+# native library on every platform.
+opus-pure = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
