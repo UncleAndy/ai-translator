@@ -196,6 +196,21 @@ both repositories on a macOS runner, so this path is checked on every push.
 Building for macOS *from* Linux is also possible, with osxcross in a container — see
 `docs/macos-cross-build.md`.
 
+### Microphone permission on macOS
+
+macOS asks for microphone access the first time `ai-translator run` opens an input device.
+The permission is granted to the **terminal application** the command is started from
+(Terminal, iTerm, VS Code), not to the `ai-translator` binary: that is what the system sees
+asking. A signed `.app` bundle would be asked in its own name. Accept the prompt once and
+`run` works from that terminal.
+
+If the prompt was dismissed, grant the permission in *System Settings → Privacy & Security →
+Microphone*, or ask again with `tccutil reset Microphone` — it resets the decision for all
+applications, so every other application will ask again as well.
+
+A future `.app` bundle will need `NSMicrophoneUsageDescription` in its `Info.plist`, together
+with signing and notarization; that belongs to stage 4.
+
 ## Project layout
 
 ```
