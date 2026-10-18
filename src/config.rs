@@ -190,30 +190,6 @@ pub enum VoiceSinkConfig {
         #[serde(default)]
         monitor_original: f32,
     },
-    /// Send the translated speech into a Telegram group through a bot.
-    Telegram {
-        /// Whether the sink is enabled.
-        #[serde(default = "yes")]
-        enabled: bool,
-        /// Group the voice messages go to: `@name` or a numeric id. The bot must
-        /// be a member of that group.
-        chat_id: String,
-        /// Name of the environment variable holding the token of the voice bot.
-        #[serde(default = "default_telegram_voice_token_env")]
-        token_env: String,
-        /// Forum topic identifier, when the group is a forum.
-        #[serde(default)]
-        message_thread_id: Option<i64>,
-        /// Longest audio in one voice message, in seconds.
-        #[serde(default = "default_voice_chunk_seconds")]
-        max_chunk_seconds: u64,
-        /// Pause that closes a fragment and sends it, in milliseconds.
-        #[serde(default = "default_voice_gap_ms")]
-        gap_ms: u64,
-        /// How many voice messages the sink may post per minute; 0 removes the limit.
-        #[serde(default = "default_telegram_max_sends")]
-        max_sends_per_minute: u32,
-    },
 }
 
 impl VoiceSinkConfig {
@@ -221,7 +197,6 @@ impl VoiceSinkConfig {
     pub fn enabled(&self) -> bool {
         match self {
             VoiceSinkConfig::VirtualSink { enabled, .. } => *enabled,
-            VoiceSinkConfig::Telegram { enabled, .. } => *enabled,
         }
     }
 
@@ -229,7 +204,6 @@ impl VoiceSinkConfig {
     pub fn kind(&self) -> &'static str {
         match self {
             VoiceSinkConfig::VirtualSink { .. } => "virtual_sink",
-            VoiceSinkConfig::Telegram { .. } => "telegram",
         }
     }
 }
@@ -409,24 +383,6 @@ impl Config {
                         });
                     }
                 }
-                VoiceSinkConfig::Telegram {
-                    chat_id, token_env, ..
-                } => {
-                    if chat_id.trim().is_empty() {
-                        problems.push(ConfigProblem::Invalid {
-                            field: "sink.voice.telegram.chat_id".into(),
-                            reason: "пустое значение".into(),
-                        });
-                    }
-                    if token_env.trim().is_empty() {
-                        problems.push(ConfigProblem::Invalid {
-                            field: "sink.voice.telegram.token_env".into(),
-                            reason: "пустое значение".into(),
-                        });
-                    } else if std::env::var(token_env).is_err() {
-                        problems.push(ConfigProblem::MissingEnv(token_env.clone()));
-                    }
-                }
             }
         }
 
@@ -472,21 +428,6 @@ fn default_telegram_max_sends() -> u32 {
 /// One edit per second: enough for the phrase to grow visibly, mild for Telegram.
 fn default_telegram_edit_interval_ms() -> u64 {
     1000
-}
-
-/// The voice bot is its own bot, so its token has its own variable.
-fn default_telegram_voice_token_env() -> String {
-    "TELEGRAM_VOICE_BOT_TOKEN".to_string()
-}
-
-/// A fragment of speech shorter than this is sent as it is, longer is cut.
-fn default_voice_chunk_seconds() -> u64 {
-    45
-}
-
-/// The pause that closes a phrase also closes a voice fragment.
-fn default_voice_gap_ms() -> u64 {
-    700
 }
 
 fn default_bind() -> String {
@@ -902,79 +843,11 @@ mod tests {
             5,
             "console, websocket, transcript, telegram и webhook"
         );
-        assert_eq!(cfg.sink.voice.len(), 2, "virtual_sink и telegram");
-        let kinds: Vec<&str> = cfg.sink.voice.iter().map(|sink| sink.kind()).collect();
-        assert_eq!(kinds, ["virtual_sink", "telegram"]);
+        assert_eq!(cfg.sink.voice.len(), 1, "virtual_sink");
         assert!(
             cfg.validate().is_empty(),
             "пример должен проходить проверку: {:?}",
             cfg.validate()
-        );
-    }
-
-    #[test]
-    fn voice_telegram_sink_is_parsed_with_its_defaults() {
-        let cfg: Config = toml::from_str(
-            r#"
-            [core]
-            target_lang = "ru"
-
-            [[source]]
-            type = "microphone"
-
-            [[sink.voice]]
-            type = "telegram"
-            chat_id = "-1001234567890"
-            "#,
-        )
-        .expect("конфигурация разбирается");
-
-        let VoiceSinkConfig::Telegram {
-            enabled,
-            chat_id,
-            token_env,
-            message_thread_id,
-            max_chunk_seconds,
-            gap_ms,
-            max_sends_per_minute,
-        } = &cfg.sink.voice[0]
-        else {
-            panic!("ожидался приёмник telegram");
-        };
-
-        assert!(enabled, "приёмник включён, если не сказано иное");
-        assert_eq!(chat_id, "-1001234567890");
-        assert_eq!(token_env, "TELEGRAM_VOICE_BOT_TOKEN", "свой токен");
-        assert_eq!(message_thread_id, &None);
-        assert_eq!(*max_chunk_seconds, 45, "минута с запасом");
-        assert_eq!(*gap_ms, 700, "пауза закрывает фразу");
-        assert_eq!(*max_sends_per_minute, 20);
-    }
-
-    #[test]
-    fn a_voice_telegram_sink_needs_its_chat() {
-        let cfg: Config = toml::from_str(
-            r#"
-            [core]
-            target_lang = "ru"
-
-            [[source]]
-            type = "microphone"
-
-            [[sink.voice]]
-            type = "telegram"
-            chat_id = " "
-            "#,
-        )
-        .expect("конфигурация разбирается");
-
-        let problems = cfg.validate();
-        assert!(
-            problems.iter().any(|problem| matches!(
-                problem,
-                ConfigProblem::Invalid { field, .. } if field == "sink.voice.telegram.chat_id"
-            )),
-            "{problems:?}"
         );
     }
 }

@@ -111,36 +111,6 @@ Translated speech comes from the AI provider itself as part of the same session 
 the translated text. Speech synthesis (TTS) is an optional additional source of audio, used
 only when a provider or a source does not produce speech of its own.
 
-### Voice messages in a Telegram group
-
-A second bot can carry the translated speech into a Telegram group as voice messages. It is
-its own bot with its own token, so the text channel and the voice group are served by two
-separate bots:
-
-```toml
-[[sink.voice]]
-type = "telegram"
-chat_id = "-1001234567890"          # group id, or @public_name
-token_env = "TELEGRAM_VOICE_BOT_TOKEN"
-max_chunk_seconds = 45              # longest single voice message
-gap_ms = 700                        # a pause this long closes the fragment
-max_sends_per_minute = 20           # 0 removes the limit
-# message_thread_id = 12            # forum topic, when the group is a forum
-```
-
-The bot has to be a member of the group; nothing else needs to be granted. Speech is gathered
-as it arrives and posted when the talk pauses for `gap_ms` — the same pause that closes a
-phrase in the text path — so the group hears a phrase roughly one pause after it was spoken.
-A fragment longer than `max_chunk_seconds` is cut, and the pieces keep their order. A run that
-ends sends what it has gathered before it stops.
-
-The Bot API has no live audio stream for bots: a bot cannot speak into a voice chat, and a
-joinable voice-chat stream needs a user session with MTProto rather than a bot token. Voice
-notes are what a bot can do, and the sink sends exactly those: OGG with Opus inside, encoded
-in pure Rust (`opus-pure`), so a release binary needs no codec library installed next to it.
-Both the audio and its container are checked by `ffprobe` in the test suite when the tool is
-present.
-
 ## Configuration
 
 One TOML file describes the core and every sink. Each sink has a `type` and an `enabled`
