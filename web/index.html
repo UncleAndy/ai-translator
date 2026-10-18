@@ -22,7 +22,8 @@
   :root {
     --accent: #00ff66;
     --line-size: 4.5vw;
-    --source-size: 2.2vw;
+    /* Исходный текст идёт следом за переводом: своя доля от его размера. */
+    --source-size: calc(var(--line-size) * 0.42);
     --bg: #050505;
   }
 
@@ -36,18 +37,27 @@
     background: var(--bg);
     color: #fff;
     font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+
+  /* Экран целиком: сцена занимает всю высоту, текст стоит по её центру.
+     Размер шрифта подбирается так, чтобы текст заполнял сцену, но не
+     обрезался (см. fit()). */
+  #stage {
+    height: 100%;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: center;
     overflow: hidden;
   }
 
   #lines {
     display: flex;
     flex-direction: column;
+    /* Высота — по содержимому: иначе сцена обрезала бы текст и подбор размера
+       (fit) сравнивал бы высоту не с тем, что нужно. */
+    flex: none;
     gap: 2vh;
-    max-height: 84vh;
-    overflow: hidden;
   }
 
   .phrase {
@@ -90,7 +100,7 @@
 </head>
 <body>
 <div id="status" class="off">подключение…</div>
-<main id="lines"></main>
+<main id="stage"><div id="lines"></div></main>
 <script>
 "use strict";
 
@@ -98,8 +108,13 @@ const MAX_LINES = 3;
 const RECONNECT_MS = 1500;
 const BASE_LINE_SIZE = 4.5;
 const MIN_LINE_SIZE = 2.0;
+/* Предел роста: короткая фраза должна заполнять экран по высоте, но не
+   превращаться в одну гигантскую букву. Длинные фразы до предела не доходят —
+   их останавливает перенос строк. */
+const MAX_LINE_SIZE = 30.0;
 const LINE_STEP = 0.25;
 
+const stageEl = document.getElementById("stage");
 const linesEl = document.getElementById("lines");
 const statusEl = document.getElementById("status");
 
@@ -122,14 +137,45 @@ function setLineSize(vw) {
   document.documentElement.style.setProperty("--line-size", vw + "vw");
 }
 
-/* Ужать шрифт, если длинная фраза не помещается на экран. */
+function clamp(value, low, high) {
+  return Math.min(high, Math.max(low, value));
+}
+
+/* Подобрать размер шрифта так, чтобы экран был занят целиком.
+ *
+ * Раньше шрифт только ужимался от неизменной основы, поэтому одна-две
+ * короткие фразы занимали нижнюю треть экрана. Теперь размер ищется в обе
+ * стороны: сначала по оценке (высота текста почти пропорциональна размеру
+ * шрифта), затем уточняется шагами — переносы и отступы пропорциональны не
+ * строго.
+ */
 function fit() {
-  let size = BASE_LINE_SIZE;
+  const available = stageEl.clientHeight;
+  if (available <= 0 || linesEl.children.length === 0) return;
+
+  setLineSize(BASE_LINE_SIZE);
+  const base = linesEl.scrollHeight;
+  if (base <= 0) return;
+
+  let size = clamp((BASE_LINE_SIZE * available) / base, MIN_LINE_SIZE, MAX_LINE_SIZE);
   setLineSize(size);
 
-  while (size > MIN_LINE_SIZE && linesEl.scrollHeight > linesEl.clientHeight) {
+  // Не помещается — ужимаем.
+  while (size > MIN_LINE_SIZE && linesEl.scrollHeight > available) {
     size -= LINE_STEP;
     setLineSize(size);
+  }
+
+  // Помещается с запасом — растём, пока есть место.
+  while (size < MAX_LINE_SIZE) {
+    setLineSize(size + LINE_STEP);
+
+    if (linesEl.scrollHeight > available) {
+      setLineSize(size);
+      break;
+    }
+
+    size += LINE_STEP;
   }
 }
 
@@ -237,6 +283,9 @@ document.addEventListener("keydown", (event) => {
     document.documentElement.requestFullscreen?.();
   }
 });
+
+// Смена разрешения или выход на весь экран меняют сцену — размер подбираем заново.
+window.addEventListener("resize", fit);
 
 let idleTimer = null;
 document.addEventListener("mousemove", () => {

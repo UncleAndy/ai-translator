@@ -89,14 +89,30 @@ class El {
   }
 }
 
-function load(protocol) {
-  const linesEl = new El("main");
+function load(protocol, stageHeight = 900) {
+  const stageEl = new El("main");
+  const linesEl = new El("div");
   const statusEl = new El("div");
   const documentElement = new El("html");
   const body = new El("body");
 
+  // Высота текста в заглушке пропорциональна размеру шрифта — иначе подбор
+  // размера (fit) нечем проверить. Множитель произвольный: важны отношения.
+  let lineSizeVw = 4.5;
+  let stage = stageHeight;
+
+  documentElement.style.setProperty = (_name, value) => {
+    lineSizeVw = parseFloat(value);
+  };
+  Object.defineProperty(linesEl, "scrollHeight", {
+    get: () => linesEl.children.length * lineSizeVw * 20,
+  });
+  Object.defineProperty(stageEl, "clientHeight", {
+    get: () => stage,
+  });
+
   const document = {
-    getElementById: (id) => (id === "lines" ? linesEl : statusEl),
+    getElementById: (id) => ({ lines: linesEl, stage: stageEl }[id] ?? statusEl),
     createElement: (tag) => new El(tag),
     addEventListener: () => {},
     documentElement,
@@ -105,6 +121,7 @@ function load(protocol) {
 
   const timers = [];
   const location = { protocol, host: "127.0.0.1:8642" };
+  const window = { addEventListener: () => {} };
 
   let socket = null;
   class FakeWebSocket {
@@ -121,6 +138,7 @@ function load(protocol) {
     "console",
     "setTimeout",
     "clearTimeout",
+    "window",
     SRC,
   );
   run(
@@ -133,14 +151,20 @@ function load(protocol) {
       return timers.length;
     },
     () => {},
+    window,
   );
 
   return {
     linesEl,
+    stageEl,
     statusEl,
     documentElement,
     timers,
     socket,
+    lineSize: () => lineSizeVw,
+    setStageHeight(value) {
+      stage = value;
+    },
     send(message) {
       socket.onmessage({ data: JSON.stringify(message) });
     },
@@ -245,6 +269,32 @@ const phraseText = (lines, index) => lines.children[index].querySelector(".line"
   page.close();
   check("обрыв связи виден", page.statusEl.textContent.startsWith("связь потеряна"), page.statusEl.textContent);
   check("переподключение запланировано", page.timers.length === 1 && page.timers[0].ms === 1500, JSON.stringify(page.timers));
+}
+
+// --- размер шрифта по высоте экрана ------------------------------------------
+// Заглушка считает высоту текста как «фразы × размер шрифта × 20», поэтому
+// проверяются отношения: рост при запасе места, ужимание при нехватке и упор в
+// оба предела.
+{
+  const roomy = load("http:", 900);
+  roomy.send({ line: 0, seq: 1, text: "короткая фраза", is_final: true });
+  check("на просторном экране шрифт растёт", roomy.lineSize() === 30, String(roomy.lineSize()));
+
+  const tight = load("http:", 300);
+  for (let i = 1; i <= 3; i += 1) {
+    tight.send({ line: 0, seq: i, text: "фраза " + i, is_final: true });
+  }
+  check("на тесном экране шрифт подобран по высоте", tight.lineSize() === 5, String(tight.lineSize()));
+
+  const tiny = load("http:", 100);
+  for (let i = 1; i <= 3; i += 1) {
+    tiny.send({ line: 0, seq: i, text: "фраза " + i, is_final: true });
+  }
+  check("ужимание упирается в предел", tiny.lineSize() === 2, String(tiny.lineSize()));
+
+  const grown = load("http:", 100);
+  grown.send({ line: 0, seq: 1, text: "одна фраза", is_final: true });
+  check("одна фраза занимает экран, а не нижний угол", grown.lineSize() === 5, String(grown.lineSize()));
 }
 
 console.log(failures === 0 ? "\nВСЕ ПРОВЕРКИ ПРОЙДЕНЫ" : `\nПРОВАЛОВ: ${failures}`);
