@@ -1,0 +1,64 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ai-translator
+      # The dependency on transono is a path dependency (../transono), so the
+      # sibling checkout has to sit next to this repository.
+      - uses: actions/checkout@v4
+        with:
+          repository: UncleAndy/transono
+          path: transono
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpipewire-0.3-dev libasound2-dev libclang-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: ai-translator
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: ai-translator
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests
+        working-directory: ai-translator
+        run: cargo test
+      - name: display page logic
+        working-directory: ai-translator
+        run: node web/test/page.mjs
+      - name: macOS must not pull PipeWire
+        working-directory: ai-translator
+        run: |
+          ! cargo tree --target aarch64-apple-darwin -e normal --prefix none \
+            | grep -qE '^(pipewire|pipewire-sys|libspa|libspa-sys)'
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ai-translator
+      - uses: actions/checkout@v4
+        with:
+          repository: UncleAndy/transono
+          path: transono
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: ai-translator
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: ai-translator
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests
+        working-directory: ai-translator
+        run: cargo test
