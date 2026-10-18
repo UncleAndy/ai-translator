@@ -15,7 +15,11 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use cpal::traits::DeviceTrait;
-use transono::audio::{AudioDevicesCpal, AudioInputCpal, AudioOutputCpal, LatencyStats};
+use transono::audio::{
+    AudioDevicesCpal, AudioInputCpal, AudioOutput, AudioOutputCpal, LatencyStats,
+};
+
+use crate::source::silent::SilentOutput;
 use transono::line::TranslationLine;
 use transono::providers::openai::translation::{
     OpenAITranslationConfig, OpenAITranslationProvider,
@@ -76,17 +80,12 @@ impl AudioSource {
             devices.find_input(&cfg.input_device)
         }
         .map_err(|e| SourceError::Device(e.to_string()))?;
-        let playback = devices
-            .default_output()
-            .map_err(|e| SourceError::Device(e.to_string()))?;
-
         let stats = Arc::new(LatencyStats::default());
         let input = AudioInputCpal::new(capture, stats.clone())
             .map_err(|e| SourceError::Device(e.to_string()))?;
-        let output = AudioOutputCpal::new(playback, stats.clone())
-            .map_err(|e| SourceError::Device(e.to_string()))?;
+        let output = playback(&cfg.output_device, &devices, stats.clone())?;
 
-        let mut line = TranslationLine::new(provider, Box::new(input), Box::new(output), stats)
+        let mut line = TranslationLine::new(provider, Box::new(input), output, stats)
             .await
             .map_err(|e| SourceError::Line(e.to_string()))?;
 
@@ -374,6 +373,62 @@ fn device_names(devices: Vec<cpal::Device>) -> Vec<String> {
         .collect()
 }
 
+/// Playback of the translated speech, chosen by `core.output_device`.
+///
+/// `none` keeps the line running without a sound card, `default` follows the
+/// system default output, and any other value is matched against the device
+/// names the `devices` command prints.
+fn playback(
+    wanted: &str,
+    devices: &AudioDevicesCpal,
+    stats: Arc<LatencyStats>,
+) -> Result<Box<dyn AudioOutput>, SourceError> {
+    let wanted = wanted.trim();
+
+    if wanted == "none" {
+        return Ok(Box::new(SilentOutput::new()));
+    }
+
+    let device = if wanted == "default" {
+        devices
+            .default_output()
+            .map_err(|e| SourceError::Device(e.to_string()))?
+    } else {
+        let mut names = Vec::new();
+        let mut chosen = None;
+
+        for device in devices
+            .output_devices()
+            .map_err(|e| SourceError::Device(e.to_string()))?
+        {
+            let name = device.description().ok().map(|d| d.name().to_string());
+
+            if name.as_deref() == Some(wanted) {
+                chosen = Some(device);
+                break;
+            }
+            if let Some(name) = name {
+                names.push(name);
+            }
+        }
+
+        chosen.ok_or_else(|| {
+            let known = if names.is_empty() {
+                "ни одного".to_string()
+            } else {
+                names.join(", ")
+            };
+            SourceError::Device(format!(
+                "устройство вывода «{wanted}» не найдено; есть: {known}"
+            ))
+        })?
+    };
+
+    Ok(Box::new(
+        AudioOutputCpal::new(device, stats).map_err(|e| SourceError::Device(e.to_string()))?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,9 +440,19 @@ mod tests {
             source_lang: "auto".to_string(),
             target_lang: "ru".to_string(),
             input_device: "default".to_string(),
+            output_device: "default".to_string(),
             voice: None,
             transcription_model: None,
         }
+    }
+
+    #[test]
+    fn no_playback_needs_no_sound_card() {
+        let devices = AudioDevicesCpal::new();
+        let output = playback("none", &devices, Arc::new(LatencyStats::default()))
+            .expect("тихий вывод не требует устройства");
+
+        assert_eq!(output.format().sample_rate, 24_000);
     }
 
     #[test]

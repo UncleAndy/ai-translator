@@ -388,6 +388,7 @@ provider = "openai/translation"
 source_lang = "auto"
 target_lang = "ru"
 input_device = "default"
+output_device = "default"  # none — не играть локально
 # tts_provider = "openai/tts"  # опционально: синтез речи, если провайдер не даёт звук
 
 [[sink.text]]

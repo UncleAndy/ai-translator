@@ -149,6 +149,7 @@ provider = "openai/translation"
 source_lang = "auto"
 target_lang = "ru"
 input_device = "default"
+output_device = "default"
 
 [[sink.text]]
 type = "console"
@@ -176,6 +177,12 @@ The `websocket` sink serves the display page on `bind`; the page itself is
 `web/index.html`, embedded into the binary. It asks the sink for its display
 settings at `/settings.js`, so `line_size_vw` and `min_line_size_vw` are the only
 knobs for the text size on the big screen.
+
+The translated speech always has a local playback: `core.output_device` names the
+device it goes to, `default` is the system default output, and `none` turns the
+local playback off while the voice sinks keep receiving the audio. Voice sinks
+(`virtual_sink`, `telegram_call`) are extra receivers of the same stream, not a
+replacement for it.
 
 Ready-made examples live in `examples/`: `config.dev.toml` for development,
 `config.stream.toml` for broadcasting, `config.offline.toml` for a run without network.

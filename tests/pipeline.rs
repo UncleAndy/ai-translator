@@ -40,6 +40,7 @@ fn core() -> CoreConfig {
         source_lang: "auto".to_string(),
         target_lang: "ru".to_string(),
         input_device: "default".to_string(),
+        output_device: "default".to_string(),
         voice: None,
         transcription_model: None,
     }

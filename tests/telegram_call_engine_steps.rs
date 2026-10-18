@@ -16,10 +16,7 @@ async fn the_engine_takes_the_sources_of_the_sink() {
     let engine = NTgCalls::new();
     let call_id = -1_000_000_000_123i64;
 
-    let local = engine
-        .create_call(call_id)
-        .await
-        .expect("параметры звонка");
+    let local = engine.create_call(call_id).await.expect("параметры звонка");
     println!("create_call: ok, {} символов параметров", local.len());
 
     let sources = MediaDescription {

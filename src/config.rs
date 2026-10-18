@@ -33,6 +33,12 @@ pub struct CoreConfig {
     /// Capture device (`default` is the system default device).
     #[serde(default = "default_device")]
     pub input_device: String,
+    /// Playback device of the translated speech: `default` is the system
+    /// default output, `none` plays nothing locally (the voice sinks still get
+    /// the audio), anything else is the name of an output device as printed by
+    /// the `devices` command.
+    #[serde(default = "default_device")]
+    pub output_device: String,
     /// Provider synthesis voice (used by the realtime provider only).
     #[serde(default)]
     pub voice: Option<String>,
@@ -300,6 +306,12 @@ impl Config {
                 reason: "пустое значение".into(),
             });
         }
+        if self.core.output_device.trim().is_empty() {
+            problems.push(ConfigProblem::Invalid {
+                field: "core.output_device".into(),
+                reason: "пустое значение".into(),
+            });
+        }
 
         for sink in &self.sink.text {
             if !sink.enabled() {
@@ -544,6 +556,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn playback_device_accepts_none_but_not_an_empty_name() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            output_device = "none"
+            [[sink.text]]
+            type = "console"
+            enabled = true
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.core.output_device, "none");
+        assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
+
+        cfg.core.output_device = "   ".to_string();
+        let problems = cfg.validate();
+
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.to_string().contains("core.output_device")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
     fn parses_minimal_config() {
         let cfg: Config = toml::from_str(
             r#"
@@ -559,6 +599,7 @@ mod tests {
         assert_eq!(cfg.core.provider, "openai/translation");
         assert_eq!(cfg.core.source_lang, "auto");
         assert_eq!(cfg.core.input_device, "default");
+        assert_eq!(cfg.core.output_device, "default");
         assert_eq!(cfg.sink.text.len(), 1);
         assert_eq!(cfg.enabled_sinks(), 1);
         assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
