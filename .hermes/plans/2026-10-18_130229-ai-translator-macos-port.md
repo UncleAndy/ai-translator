@@ -805,3 +805,23 @@ jobs:
 Задачи 1–10 можно выполнять сейчас: их результат проверяется на Linux (регрессии) и по графу зависимостей. Задача 11 требует Mac и до её прохождения порт не считается принятым.
 
 **Оценка объёма:** правки в `transono` — порядка 60 строк (манифест, два атрибута, файл заглушки `ctl/macos.rs`); в `ai-translator` — правка флейка и документация, кода перевода не касается; задача 7 — около 100 строк с тестами. Остальное — проверки.
+
+## Задача 14. Пакетирование и релиз — выполнено 18 октября 2026, **коммит не сделан**
+
+**Что добавлено:** `packaging/build-linux.sh` (tar.gz, `.deb` и `.rpm` через nfpm, AppImage через appimagetool), `packaging/build-macos.sh` (tar.gz и `.dmg`, ad-hoc подпись после `strip`), `packaging/nfpm.yaml`, `packaging/ai-translator.desktop`, `assets/icon.svg` + `icon.png` (256×256, метка временная), `.github/workflows/release.yml` (тег `v*` → сборки на `ubuntu-24.04` и `macos-14` → черновик релиза через `gh release create --draft`), `docs/release.md`, раздел «Releases» в README, каталоги `dist/` и `build/` в `.gitignore`.
+
+**Замеры, на которых всё построено:**
+
+- бинарник из Nix-окружения переносить нельзя: `readelf` показывает интерпретатор и RUNPATH в `/nix/store`;
+- в обычном дистрибутиве — интерпретатор `/lib64/ld-linux-x86-64.so.2`, RUNPATH пуст, максимальный требуемый символ glibc **2.34** (сборка на `ubuntu:24.04`);
+- `NEEDED`: `libpipewire-0.3.so.0`, `libasound.so.2`, `libgcc_s.so.1`, `libm.so.6`, `libc.so.6`;
+- **Ubuntu 22.04 не годится:** PipeWire 0.3.48, а `libspa-sys 0.10` генерирует биндинги из системных заголовков и падает на `spa_meta_first` и `spa_video_info_raw.flags`. Отсюда сборка на 24.04 (PipeWire 1.0.5) и `Depends: libpipewire-0.3-0 (>= 1.0)`;
+- `.deb` реально ставится в чистый `ubuntu:24.04` (`apt-get install ./…deb` подтянул `libpipewire-0.3-0t64`), `ai-translator --help` работает;
+- AppImage распаковывается и запускается (`--appimage-extract-and-run`); на хосте без PipeWire падает на `dlopen` — библиотеки намеренно не упаковываются;
+- macOS: release-бинарник arm64 — 6.7 МБ после strip, внешних зависимостей нет; `.dmg` собирается только на macOS (`hdiutil`).
+
+**Найденная и исправленная ошибка:** скрипты брали версию и архитектуру из окружения, а образ osxcross определяет свои `VERSION=1.89.0-amd64`, `TARGET=musl`, `ARCH` → артефакт назывался `ai-translator-1.89.0-amd64-aarch64-macos.tar.gz`. Теперь версия читается только из `Cargo.toml`, цель передаётся через `AIT_TARGET`, а workflow на обеих платформах сверяет тег с `Cargo.toml` и падает при расхождении.
+
+**Проверки:** `actionlint` exit=0 (вместе с shellcheck), `yamllint` exit=0 (остались только предупреждения о длине строк), `bash -n` обоих скриптов, управляющих символов нет, в README кириллицы нет.
+
+**Не сделано — коммит.** В `.git/objects` 41 каталог принадлежит `nobody:nogroup`, `git add` не может туда писать (`insufficient permission for adding an object`). Нужен `sudo chown -R andy:hermes .git` (или хелпер `fixr`), после чего `git add -A && git commit`. Дальше: тег `v0.1.0` и push — workflow соберёт артефакты и создаст черновик релиза.

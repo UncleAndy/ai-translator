@@ -1,0 +1,46 @@
+# Package metadata for the .deb and the .rpm; nfpm reads both.
+# ARCH and VERSION come from the environment: packaging/build-linux.sh sets them.
+name: ai-translator
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: sound
+priority: optional
+maintainer: Andrey Velikoredchanin <andy@uncleandyv.com>
+vendor: Andrey Velikoredchanin
+homepage: https://github.com/UncleAndy/ai-translator
+license: MIT OR Apache-2.0
+description: |
+  Synchronous speech and text translator.
+
+  Translates speech and text as it happens and mirrors the result to any number
+  of sinks: a full-screen page, subtitle files, JSON lines over WebSocket. The
+  page is embedded in the binary, so no extra files are needed to run it.
+depends:
+  # libspa-sys builds its bindings from the system PipeWire headers and needs
+  # PipeWire 1.0, and the binary uses symbols that older releases lack.
+  - libpipewire-0.3-0 (>= 1.0)
+  - libasound2
+contents:
+  - src: dist/ai-translator
+    dst: /usr/bin/ai-translator
+    file_info:
+      mode: 0755
+  - src: examples
+    dst: /usr/share/ai-translator/examples
+  - src: README.md
+    dst: /usr/share/doc/ai-translator/README.md
+  - src: LICENSE-MIT
+    dst: /usr/share/doc/ai-translator/LICENSE-MIT
+  - src: LICENSE-APACHE
+    dst: /usr/share/doc/ai-translator/LICENSE-APACHE
+  - src: assets/icon.png
+    dst: /usr/share/pixmaps/ai-translator.png
+  - src: packaging/ai-translator.desktop
+    dst: /usr/share/applications/ai-translator.desktop
+overrides:
+  rpm:
+    # Fedora and friends name the same libraries differently.
+    depends:
+      - pipewire-libs >= 1.0
+      - alsa-lib

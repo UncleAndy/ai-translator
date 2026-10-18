@@ -269,12 +269,19 @@ The audio capture, DSP, audio graph and AI provider layers come from
 AI-TRANSLATOR adds the application layer on top of it: the event bus, the sink subsystem,
 configuration and the command-line interface.
 
+## Releases
+
+Tagging `v*` builds the artefacts and fills a draft release on GitHub; the details are in [docs/release.md](docs/release.md). Linux binaries need glibc 2.34 or newer, `libpipewire-0.3-0` 1.0 or newer and `libasound2`; the AppImage expects the same libraries on the system, it does not bundle them. macOS needs nothing beyond the system.
+
+Nothing is signed. On macOS the binary carries an ad-hoc signature, without which Apple Silicon will not start it at all, but Gatekeeper still treats the application as unsigned: open it once from the context menu, or run `xattr -d com.apple.quarantine ./ai-translator`.
+
 ## Documentation
 
 - `docs/TZ_ai-translator_v0.1.md` — technical specification (Russian)
 - `docs/decisions.md` — decisions that shape the project (Russian)
 - `docs/methods.txt` — source material on delivery protocols (Russian)
 - `docs/macos-cross-build.md` — building for macOS from Linux with osxcross (Russian)
+- `docs/release.md` — how releases are built and what the artefacts need (Russian)
 
 ## License
 

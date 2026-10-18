@@ -33,6 +33,14 @@ target
 /*.jsonl
 /transcript.*
 
+# Release packaging: working directories and outputs of packaging/build-*.sh
+/dist
+/build
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+
 # Editor and OS files
 /.idea
 /.vscode

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AI Translator
+Comment=Synchronous speech and text translator
+Exec=ai-translator
+Terminal=true
+Categories=AudioVideo;Audio;
+Icon=ai-translator
