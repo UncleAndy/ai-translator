@@ -2,3 +2,5 @@
 
 /// Normalized translation event model shared by the core and the sinks.
 pub mod event;
+
+pub use event::*;

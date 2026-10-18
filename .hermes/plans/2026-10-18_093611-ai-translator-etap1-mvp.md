@@ -44,6 +44,7 @@
 | Устройства звука | `audio::{AudioDevicesCpal, AudioInputCpal, AudioOutputCpal, LatencyStats}` | `devices.default_input()`, `::new(device, stats)` |
 | Граф аудио | `runtime::{AudioLink, AudioSplitter, AudioMixer}` | раздача и подмешивание звука |
 | Виртуальные устройства | `ctl::create_backend()` | Этап 4 |
+| Аудиоконтейнер | `audio::Audio` | `Clone` + `Debug`, внутри `Arc` (дешёвое клонирование, без копии сэмплов); `PcmAudio` — форма для DSP, без `Debug`/`Clone` |
 
 **Базовый провайдер — синхронного перевода.** `providers::openai::translation` работает с потоковым API перевода (`wss://api.openai.com/v1/realtime/translations`, модель `gpt-realtime-translate`): аудио говорящего уходит в сессию, обратно приходит **переведённая речь** (`session.output_audio.delta` → `SessionEvent::Audio`), **текст перевода** (`session.output_transcript.delta` → `SessionEvent::Text`) и **распознавание исходной речи** (`session.input_transcript.delta` → `SessionEvent::InputText`). Это и есть синхронный перевод: один поток, один язык-цель (`config.lang` → `session.audio.output.language`), без ожидания конца фразы. Распознавание исходной речи включается самим провайдером при `session.update` (`whisper-1`), отдельной настройки не требует.
 
@@ -408,8 +409,9 @@ pub enum TranslationEvent {
     TranslatedAudio {
         /// Линия, к которой относится событие.
         line: LineId,
-        /// Аудио в едином внутреннем формате.
-        pcm: transono::audio::PcmAudio,
+        /// Аудиофрагмент в контейнере библиотеки (`Audio` — счётчик ссылок,
+        /// дешёвое клонирование; приведение к PCM выполняет приёмник).
+        audio: transono::audio::Audio,
         /// Момент события.
         at: Instant,
     },
@@ -937,7 +939,7 @@ pub mod voice;
 
 use async_trait::async_trait;
 use crate::bus::{LineId, TranslationEvent};
-use transono::audio::PcmAudio;
+use transono::audio::Audio;
 
 /// Ошибка приёмника.
 #[derive(Debug, thiserror::Error)]
@@ -976,7 +978,7 @@ pub trait VoiceSink: Send {
     fn id(&self) -> &str;
 
     /// Обработать фрагмент звука перевода.
-    async fn on_audio(&mut self, line: LineId, pcm: &PcmAudio) -> Result<()>;
+    async fn on_audio(&mut self, line: LineId, audio: &Audio) -> Result<()>;
 
     /// Корректно завершить работу.
     async fn shutdown(self: Box<Self>) -> Result<()>;
@@ -1453,7 +1455,9 @@ fn source_text_closes_on_its_own_pause() {
 #[test]
 fn audio_becomes_translated_audio_event() {
     let mut a = adapter();
-    let audio = transono::audio::Audio::silence_48k_mono(240); // тестовый фрагмент
+    let spec = OpenAITranslationConfig::default().audio_format().spec().clone();
+    let pcm = transono::audio::PcmAudio::new(spec, 240);
+    let audio = transono::audio::Audio::from_pcm(&pcm).expect("тестовый фрагмент");
     let out = a.adapt(SessionEvent::Audio(audio), Instant::now());
     assert!(matches!(out[0], TranslationEvent::TranslatedAudio { .. }));
 }
