@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<!--
+  Экран перевода: страница большого экрана для приёмника «локальный WebSocket-сервер».
+
+  Подключается к ws://<host>/ws и получает события перевода в виде JSON.
+
+  Формат сообщений (задаётся приёмником, задача 10):
+    перевод      {"line":0,"seq":12,"text":"привет мир","source_text":"hello world","is_final":true}
+    состояние    {"line":0,"state":"running"}
+  Поле source_text необязательно; seq монотонно растёт в пределах линии и
+  используется для отбрасывания повторов после переподключения. Аудиопакеты
+  перевода на страницу не отправляются.
+
+  Клавиша F разворачивает страницу на весь экран, курсор прячется при простое.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Экран перевода</title>
+<style>
+  :root {
+    --accent: #00ff66;
+    --line-size: 4.5vw;
+    --source-size: 2.2vw;
+    --bg: #050505;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    padding: 3vh 4vw;
+    background: var(--bg);
+    color: #fff;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    overflow: hidden;
+  }
+
+  #lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2vh;
+    max-height: 84vh;
+    overflow: hidden;
+  }
+
+  .phrase {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4vh;
+  }
+
+  .source {
+    font-size: var(--source-size);
+    font-weight: 400;
+    line-height: 1.25;
+    opacity: 0.45;
+    overflow-wrap: anywhere;
+  }
+
+  .line {
+    font-size: var(--line-size);
+    font-weight: 600;
+    line-height: 1.25;
+    opacity: 0.35;
+    overflow-wrap: anywhere;
+    transition: opacity 0.3s ease, color 0.3s ease;
+  }
+
+  .phrase.active .line { opacity: 1; color: var(--accent); }
+  .phrase.done .line { opacity: 0.8; color: #fff; }
+
+  #status {
+    position: fixed;
+    top: 1.6vh;
+    right: 2.4vw;
+    font-size: clamp(12px, 1.1vw, 20px);
+    letter-spacing: 0.04em;
+    opacity: 0.55;
+  }
+
+  #status.off { color: #ff5c5c; opacity: 0.9; }
+</style>
+</head>
+<body>
+<div id="status" class="off">подключение…</div>
+<main id="lines"></main>
+<script>
+"use strict";
+
+const MAX_LINES = 3;
+const RECONNECT_MS = 1500;
+const BASE_LINE_SIZE = 4.5;
+const MIN_LINE_SIZE = 2.0;
+const LINE_STEP = 0.25;
+
+const linesEl = document.getElementById("lines");
+const statusEl = document.getElementById("status");
+
+let current = null;
+
+function setStatus(text, broken) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle("off", Boolean(broken));
+}
+
+const STATE_LABELS = {
+  created: "линия создана",
+  starting: "запуск провайдера…",
+  running: "на связи",
+  stopped: "перевод остановлен",
+  failed: "сбой провайдера",
+};
+
+function setLineSize(vw) {
+  document.documentElement.style.setProperty("--line-size", vw + "vw");
+}
+
+/* Ужать шрифт, если длинная фраза не помещается на экран. */
+function fit() {
+  let size = BASE_LINE_SIZE;
+  setLineSize(size);
+
+  while (size > MIN_LINE_SIZE && linesEl.scrollHeight > linesEl.clientHeight) {
+    size -= LINE_STEP;
+    setLineSize(size);
+  }
+}
+
+function trim() {
+  while (linesEl.children.length > MAX_LINES) {
+    linesEl.removeChild(linesEl.firstChild);
+  }
+}
+
+function startPhrase() {
+  const phrase = document.createElement("div");
+  phrase.className = "phrase active";
+
+  const line = document.createElement("div");
+  line.className = "line";
+  line.textContent = "…";
+
+  phrase.appendChild(line);
+  linesEl.appendChild(phrase);
+  trim();
+  setLineSize(BASE_LINE_SIZE);
+
+  current = phrase;
+  return phrase;
+}
+
+function sourceOf(phrase) {
+  let source = phrase.querySelector(".source");
+  if (!source) {
+    source = document.createElement("div");
+    source.className = "source";
+    phrase.insertBefore(source, phrase.firstChild);
+  }
+  return source;
+}
+
+/* Фраза завершена: приглушить её и начать следующую. */
+function releasePhrase() {
+  if (current) {
+    current.classList.remove("active");
+    current.classList.add("done");
+    current = null;
+  }
+  setLineSize(BASE_LINE_SIZE);
+}
+
+const lastSeq = new Map(); // линия → последний показанный номер события
+
+function onTranslation(message) {
+  const line = message.line ?? 0;
+
+  if (typeof message.seq === "number") {
+    if (message.seq <= (lastSeq.get(line) ?? -1)) return; // повтор после переподключения
+    lastSeq.set(line, message.seq);
+  }
+
+  // Текст финального события относится к завершаемой фразе, поэтому сначала
+  // записываем его в текущую фразу и только потом отпускаем её.
+  const phrase = current || startPhrase();
+  phrase.querySelector(".line").textContent = message.text;
+
+  if (typeof message.source_text === "string" && message.source_text.length > 0) {
+    sourceOf(phrase).textContent = message.source_text;
+  }
+
+  if (message.is_final) releasePhrase();
+
+  fit();
+}
+
+function onEvent(message) {
+  if (typeof message.state === "string") {
+    setStatus(STATE_LABELS[message.state] || message.state, message.state === "failed");
+    return;
+  }
+
+  if (typeof message.text === "string") onTranslation(message);
+}
+
+function connect() {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const host = location.host || "127.0.0.1:8642"; // страница открыта как файл
+  const ws = new WebSocket(scheme + "//" + host + "/ws");
+
+  ws.onopen = () => setStatus("на связи", false);
+
+  ws.onmessage = (event) => {
+    try {
+      onEvent(JSON.parse(event.data));
+    } catch (error) {
+      console.warn("не разобрано сообщение", error);
+    }
+  };
+
+  ws.onerror = () => setStatus("ошибка связи", true);
+
+  ws.onclose = () => {
+    setStatus("связь потеряна, переподключение…", true);
+    setTimeout(connect, RECONNECT_MS);
+  };
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А") {
+    document.documentElement.requestFullscreen?.();
+  }
+});
+
+let idleTimer = null;
+document.addEventListener("mousemove", () => {
+  document.body.style.cursor = "";
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { document.body.style.cursor = "none"; }, 5000);
+});
+
+connect();
+</script>
+</body>
+</html>
