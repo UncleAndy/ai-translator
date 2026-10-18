@@ -5,13 +5,13 @@
 //! the [`unknown_type`] helper for callers that switch on a type name by hand.
 
 use super::text::console::ConsoleSink;
-use super::text::telegram::TelegramSink;
+use super::text::telegram::{TelegramSink, TelegramSpec};
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
 use super::text::websocket::{ScreenSettings, WebsocketSink};
 use super::voice::virtual_sink::VirtualSink;
 use super::{Result, SinkError, TextSink, VoiceSink};
-use crate::config::{TextSinkConfig, VoiceSinkConfig};
+use crate::config::{TelegramMode, TextSinkConfig, VoiceSinkConfig};
 
 /// Build a text sink from its configuration.
 ///
@@ -44,19 +44,25 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             id, path, *format, *bilingual,
         )?)),
         TextSinkConfig::Telegram {
+            mode,
             chat_id,
             token_env,
+            state_file,
             bilingual,
             silent,
             message_thread_id,
             ..
-        } => Ok(Box::new(TelegramSink::from_env(
+        } => Ok(Box::new(TelegramSink::from_spec(
             id,
-            chat_id,
-            token_env,
-            *bilingual,
-            *silent,
-            *message_thread_id,
+            TelegramSpec {
+                chat_id: chat_id.as_deref(),
+                token_env,
+                state_file,
+                broadcast: *mode == TelegramMode::Broadcast,
+                bilingual: *bilingual,
+                silent: *silent,
+                thread: *message_thread_id,
+            },
         )?)),
         TextSinkConfig::Webhook {
             url,
@@ -134,8 +140,10 @@ mod tests {
     fn telegram() -> TextSinkConfig {
         TextSinkConfig::Telegram {
             enabled: true,
-            chat_id: "-1001234567890".into(),
+            mode: TelegramMode::Single,
+            chat_id: Some("-1001234567890".into()),
             token_env: "PATH".into(),
+            state_file: "~/.local/state/ai-translator/telegram-test.json".into(),
             bilingual: false,
             silent: true,
             message_thread_id: None,

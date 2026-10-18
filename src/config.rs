@@ -92,16 +92,25 @@ pub enum TextSinkConfig {
         #[serde(default)]
         bilingual: bool,
     },
-    /// Send the translation to a Telegram chat through a bot.
+    /// Send the translation to Telegram chats through a bot.
     Telegram {
         /// Whether the sink is enabled.
         #[serde(default = "yes")]
         enabled: bool,
+        /// Where the translation goes: one chat, or everyone who writes to the bot.
+        #[serde(default)]
+        mode: TelegramMode,
         /// Chat identifier: a number, `@channel`, or the id of a private chat.
-        chat_id: String,
+        /// Required in [`TelegramMode::Single`]; one more recipient in
+        /// [`TelegramMode::Broadcast`].
+        #[serde(default)]
+        chat_id: Option<String>,
         /// Name of the environment variable holding the bot token.
         #[serde(default = "default_telegram_token_env")]
         token_env: String,
+        /// State file with the list of chats that receive the translation.
+        #[serde(default = "default_telegram_state_file")]
+        state_file: String,
         /// Post the source text above the translation.
         #[serde(default)]
         bilingual: bool,
@@ -150,6 +159,17 @@ impl TextSinkConfig {
             TextSinkConfig::Webhook { .. } => "webhook",
         }
     }
+}
+
+/// Who receives the Telegram translation.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TelegramMode {
+    /// One chat, named in the configuration.
+    #[default]
+    Single,
+    /// Everyone who wrote to the bot, plus every group it was added to.
+    Broadcast,
 }
 
 /// Transcript file format.
@@ -316,12 +336,24 @@ impl Config {
                     }
                 }
                 TextSinkConfig::Telegram {
-                    chat_id, token_env, ..
+                    mode,
+                    chat_id,
+                    token_env,
+                    state_file,
+                    ..
                 } => {
-                    if chat_id.trim().is_empty() {
+                    let chat = chat_id.as_deref().map(str::trim).unwrap_or("");
+
+                    if *mode == TelegramMode::Single && chat.is_empty() {
                         problems.push(ConfigProblem::Invalid {
                             field: "sink.text.telegram.chat_id".into(),
-                            reason: "пустое значение".into(),
+                            reason: "пустое значение, а режим single требует чат".into(),
+                        });
+                    }
+                    if *mode == TelegramMode::Broadcast && state_file.trim().is_empty() {
+                        problems.push(ConfigProblem::Invalid {
+                            field: "sink.text.telegram.state_file".into(),
+                            reason: "пустое значение: список получателей негде хранить".into(),
                         });
                     }
                     if token_env.trim().is_empty() {
@@ -410,6 +442,11 @@ fn default_device() -> String {
 
 fn default_telegram_token_env() -> String {
     "TELEGRAM_BOT_TOKEN".to_string()
+}
+
+/// The subscriber list lives under the home directory, like the rest of the state.
+fn default_telegram_state_file() -> String {
+    "~/.local/state/ai-translator/telegram-chats.json".to_string()
 }
 
 fn default_bind() -> String {
@@ -785,6 +822,58 @@ mod tests {
             text.contains("AI_TRANSLATOR_DEFINITELY_MISSING_TOKEN"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_single_chat_telegram_sink_needs_its_chat() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            token_env = "PATH"
+        "#,
+        )
+        .unwrap();
+
+        let text = cfg
+            .validate()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(text.contains("chat_id"), "{text}");
+    }
+
+    #[test]
+    fn a_broadcast_telegram_sink_needs_no_chat() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "telegram"
+            mode = "broadcast"
+            token_env = "PATH"
+        "#,
+        )
+        .unwrap();
+
+        assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Telegram {
+                mode, state_file, ..
+            } => {
+                assert_eq!(*mode, TelegramMode::Broadcast);
+                assert!(
+                    state_file.contains("telegram-chats.json"),
+                    "умолчание указывает на файл со списком получателей: {state_file}"
+                );
+            }
+            other => panic!("ожидался приёмник Telegram, получено {other:?}"),
+        }
     }
 
     #[test]

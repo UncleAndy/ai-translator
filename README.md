@@ -88,7 +88,7 @@ Implemented on stage 1:
 | `console` | terminal output for observation and debugging |
 | `websocket` | local HTTP server plus a full-screen page for a stage display or OBS Browser Source |
 | `transcript` | recording to TXT, SRT, VTT or JSONL, optionally bilingual |
-| `telegram` | posting the translation into a chat or channel through a bot, one message per phrase, edited as the phrase grows |
+| `telegram` | posting the translation into Telegram, one message per phrase, edited as the phrase grows |
 
 Declared in the configuration and reserved for the next stages:
 
@@ -101,6 +101,23 @@ A sink that is not ready says so instead of silently swallowing the translation:
 sink is never started, and a sink that cannot deliver reports an error, which the supervisor
 records and acts on. A sink that fails is restarted with a bounded number of attempts and
 does not affect the other sinks.
+
+### Telegram
+
+Two delivery modes, chosen by `mode` in the sink block.
+
+`single` posts into the one chat named in `chat_id`. `broadcast` posts to everyone who
+wrote to the bot and to every group the bot was added to: Telegram has no call that lists
+the chats of a bot, so the sink polls `getUpdates` in the background and keeps the list in
+the file named by `state_file`. A person has to open the chat and press Start — a bot
+cannot write first — and in a private chat `/start` and `/stop` switch the translation on
+and off. In a group the list changes only when the bot is added or removed, so no member can
+switch the translation off for everyone.
+
+Each chat gets its own message per phrase and edits it on its own schedule, so a chat that
+blocks the bot or falls behind never holds up the others. A chat that answers with
+"blocked", "kicked" or "chat not found" is dropped from the list; the configured chat is
+never dropped.
 
 On macOS a virtual audio device is not part of the system audio stack but a third-party
 driver the user installs (BlackHole, Loopback); the application never installs a driver
