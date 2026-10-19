@@ -317,10 +317,25 @@ Packages are built locally and published from the local repository; CI uploads n
 
 ```sh
 bash packaging/build-all.sh
-nix shell nixpkgs#gh -c gh release create v0.1.0 --verify-tag --generate-notes dist/*
+nix shell nixpkgs#gh -c gh release create v0.2.2 --verify-tag --generate-notes dist/*
 ```
 
-The first command fills `dist/` with the Linux and the macOS files plus `SHA256SUMS`, the second attaches them to a release of an existing tag. Linux binaries need glibc 2.34 or newer, `libpipewire-0.3-0` 1.0 or newer and `libasound2`; the AppImage expects them on the system, it does not bundle them. macOS needs nothing beyond the system. Nothing is signed: on macOS the binary carries an ad-hoc signature, without which Apple Silicon will not start it at all, but Gatekeeper still treats the application as unsigned — open it once from the context menu, or run `xattr -d com.apple.quarantine ./ai-translator`. Details are in [docs/release.md](docs/release.md).
+The first command fills `dist/` with the Linux and the macOS files plus `SHA256SUMS`, the second attaches them to a release of an existing tag. Linux binaries need glibc 2.34 or newer, `libpipewire-0.3-0` 1.0 or newer and `libasound2`; the AppImage expects them on the system, it does not bundle them. macOS needs nothing beyond the system. Nothing is signed: the binary carries an ad-hoc signature, without which Apple Silicon will not start it at all, but Gatekeeper still treats the application as unsigned. Use the installer that ships in the archive — it copies the program with the engine beside it, clears the quarantine mark from the whole folder (a library that fails that check is refused, and the mark cannot be removed on the read-only disk image), links the command into `~/.local/bin` and prints the version it started:
+
+```sh
+./install-macOS.sh
+```
+
+The disk image is for people who prefer Finder: drag the folder out, then run the same script from there. Unpacking a `curl` download skips the quarantine altogether, since only the browser sets it:
+
+```sh
+mkdir -p ~/ai-translator
+curl -fsSL https://github.com/UncleAndy/ai-translator/releases/download/v0.2.2/ai-translator-0.2.2-aarch64-macos.tar.gz \
+  | tar xz -C ~/ai-translator --strip-components=1
+~/ai-translator/install-macOS.sh
+```
+
+Details are in [docs/release.md](docs/release.md).
 
 ## Documentation
 

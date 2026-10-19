@@ -1,0 +1,44 @@
+ai-translator for macOS: how to start it
+=========================================
+
+Shortest way, from a terminal — one command, and it does the rest:
+
+    ./install-macOS.sh
+
+It copies the folder to ~/Applications/ai-translator, clears the quarantine mark,
+links the command into ~/.local/bin when that is in PATH, and prints the version it
+managed to start. Options are in the script header (AIT_PREFIX, AIT_BIN_DIR).
+
+What that command replaces, if you would rather do it by hand:
+
+This build carries an ad-hoc signature only. There is no Apple Developer ID and no
+notarisation, so macOS quarantines the files and refuses to load the media engine
+that lies next to the binary. The disk image cannot be used in place either: its
+volume is read-only, so the quarantine mark cannot be removed there.
+
+1. Copy the folder out of the disk image and onto the local disk.
+
+       cp -R "/Volumes/AI Translator/." ~/ai-translator
+
+   From the .tar.gz instead:
+
+       mkdir -p ~/ai-translator
+       tar xzf ai-translator-<version>-<arch>-macos.tar.gz \
+           -C ~/ai-translator --strip-components=1
+
+2. Remove the quarantine mark from the whole folder, not from the binary alone:
+   libntgcalls.dylib carries it too, and a library that fails the check is
+   refused with "library load disallowed by system policy".
+
+       xattr -dr com.apple.quarantine ~/ai-translator
+
+3. Run it, with the library beside the binary.
+
+       ~/ai-translator/ai-translator --version
+       ~/ai-translator/ai-translator run -c ~/ai-translator.config.toml
+
+The binary does not start without libntgcalls.dylib: the engine is an ordinary
+shared dependency, found through @loader_path, so the two files stay together.
+The Intel build has no engine and no voice-chat sink.
+
+The microphone permission is asked on the first `run`. Apple Silicon only.

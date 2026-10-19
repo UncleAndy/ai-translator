@@ -6,7 +6,7 @@
 
 ```sh
 bash packaging/build-all.sh
-nix shell nixpkgs#gh -c gh release create v0.2.1 --verify-tag --generate-notes dist/*
+nix shell nixpkgs#gh -c gh release create v0.2.2 --verify-tag --generate-notes dist/*
 ```
 
 Первая собирает всё в `dist/` и кладёт туда же `SHA256SUMS`. Вторая создаёт релиз с уже существующего тега и прикладывает к нему файлы из `dist/` — имя тега обязано совпадать с версией в `Cargo.toml`.
@@ -24,7 +24,7 @@ FEATURES=telegram-call bash packaging/build-all.sh
 Тег ставится отдельно, до публикации:
 
 ```sh
-git tag -a v0.2.1 -m "ai-translator 0.2.1" && git push origin v0.2.1
+git tag -a v0.2.2 -m "ai-translator 0.2.1" && git push origin v0.2.2
 ```
 
 ## Что получается в `dist/`
@@ -59,7 +59,30 @@ git tag -a v0.2.1 -m "ai-translator 0.2.1" && git push origin v0.2.1
 
 ## Подпись и Gatekeeper
 
-- **macOS.** Ad-hoc подпись есть, Developer ID и нотаризации нет: Gatekeeper считает приложение неподписанным. Первый запуск — правый клик → «Открыть», либо `xattr -d com.apple.quarantine ./ai-translator`.
+- **macOS.** Ad-hoc подпись есть, Developer ID и нотаризации нет: Gatekeeper считает приложение неподписанным. Запускать прямо с тома DMG нельзя: том только для чтения, а карантин снять надо **со всего каталога**, включая `libntgcalls.dylib` — библиотека, не прошедшая проверку, отвергается с `library load disallowed by system policy`, и бинарник падает ещё до `--version`. Порядок:
+
+  ```sh
+  cp -R "/Volumes/AI Translator/." ~/ai-translator
+  xattr -dr com.apple.quarantine ~/ai-translator
+  ~/ai-translator/ai-translator --version
+  ```
+
+  Все эти шаги делает скрипт `install-macOS.sh`, который лежит в tar.gz и в DMG: копирует программу с движком в `~/Applications/ai-translator`, снимает метку со всего каталога, ставит ссылку в `~/.local/bin`, если тот в `PATH`, и печатает версию, которую удалось запустить. Достаточно:
+
+  ```sh
+  ./install-macOS.sh
+  ```
+
+  Быстрее всего — вообще без DMG: `curl` не ставит карантинную метку (её ставит браузер), поэтому распакованный архив запускается сразу:
+
+  ```sh
+  mkdir -p ~/ai-translator
+  curl -fsSL https://github.com/UncleAndy/ai-translator/releases/download/v0.2.2/ai-translator-0.2.2-aarch64-macos.tar.gz \
+    | tar xz -C ~/ai-translator --strip-components=1
+  ~/ai-translator/install-macOS.sh
+  ```
+
+  Проверено на живом Mac (Apple Silicon, macOS 26): после копирования и `xattr -dr` CLI запускается. Скрипт прогнан отдельно на подставном бинарнике: копирование, ссылка и проверка версии работают, отсутствие `xattr` не валит установку.
 - **Linux.** Пакеты не подписаны (GPG-ключа нет), контрольные суммы — в `SHA256SUMS`.
 
 ## Проверено

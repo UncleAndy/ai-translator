@@ -119,6 +119,10 @@ STAGE="$WORK/$NAME-$VERSION"
 mkdir -p "$STAGE"
 install -m 0755 "$WORK/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
+# The same text a reader needs before the first start: the folder has to leave the
+# disk image and lose the quarantine mark, or macOS will not load the engine.
+install -m 0644 packaging/INSTALL-macOS.txt "$STAGE/"
+install -m 0755 packaging/install-macOS.sh "$STAGE/"
 
 # The engine travels next to the binary, where its rpath looks. Apple Silicon
 # refuses to load an unsigned arm64 library, so it is signed the same way the

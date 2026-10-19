@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-19
+
+The first start on a real Mac, and what it taught: the packages were fine, the
+instructions were not.
+
+### Added
+
+- `install-macOS.sh` ships inside the macOS tarball and the disk image. It copies
+  the program with the engine into `~/Applications/ai-translator`, clears the
+  quarantine mark from the whole folder, links the command into `~/.local/bin` when
+  that directory is in `PATH`, and asks the binary for its version as a smoke check.
+  One command instead of three, and the disk image can no longer be used in place
+  by mistake.
+- `INSTALL-macOS.txt` ships there too: the same steps by hand, and the reason the
+  engine is refused when the mark stays on it.
+
+### Fixed
+
+- macOS: the package built in 0.2.1 refused to start with `Library not loaded:
+  @rpath/libntgcalls.dylib ... library load disallowed by system policy`. The
+  rpath was right — dyld found the file beside the binary — but the engine is a
+  library, macOS checks it the same way it checks an executable, and the
+  quarantine mark of the mounted disk image made the check fail. Clearing the mark
+  from the binary alone was not enough, and on a read-only image it cannot be
+  cleared at all. Verified on Apple Silicon with macOS 26: after
+  `cp -R "/Volumes/AI Translator/." ~/ai-translator` and
+  `xattr -dr com.apple.quarantine ~/ai-translator` the CLI starts and reports its
+  version.
+- `README.md` and `docs/release.md` no longer tell the reader to clear the mark
+  from a single file or to open the application from the disk image.
+
 ## [0.2.1] - 2026-10-19
 
 A packaging release: the voice-chat sink now travels in the Apple Silicon macOS
@@ -192,6 +223,7 @@ once.
 - Documentation: `docs/release.md`, `docs/macos-cross-build.md`,
   `docs/TZ_ai-translator_v0.1.md`.
 
+[0.2.2]: https://github.com/UncleAndy/ai-translator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/UncleAndy/ai-translator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/UncleAndy/ai-translator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/UncleAndy/ai-translator/releases/tag/v0.1.0
