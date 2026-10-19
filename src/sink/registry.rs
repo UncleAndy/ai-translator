@@ -10,7 +10,7 @@ use super::text::console::ConsoleSink;
 use super::text::telegram::{TelegramSink, TelegramSpec};
 use super::text::transcript::TranscriptSink;
 use super::text::webhook::WebhookSink;
-use super::text::websocket::{ScreenSettings, WebsocketSink};
+use super::text::websocket::{Poster, ScreenSettings, WebsocketSink};
 use super::voice::virtual_sink::VirtualSink;
 use super::{Result, SinkError, TextSink, VoiceSink};
 use crate::config::{TextSinkConfig, VoiceSinkConfig};
@@ -28,6 +28,10 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             bind,
             line_size_vw,
             min_line_size_vw,
+            image_path,
+            image_text_top,
+            image_text_bottom,
+            image_show_timeout,
             ..
         } => Ok(Box::new(WebsocketSink::new(
             id,
@@ -35,7 +39,13 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             ScreenSettings {
                 line_size_vw: *line_size_vw,
                 min_line_size_vw: *min_line_size_vw,
+                poster: image_path.as_ref().map(|_| Poster {
+                    text_top: image_text_top.clone().unwrap_or_default(),
+                    text_bottom: image_text_bottom.clone().unwrap_or_default(),
+                    timeout_secs: *image_show_timeout,
+                }),
             },
+            image_path.clone(),
         )?)),
         TextSinkConfig::Transcript {
             path,
@@ -170,6 +180,10 @@ mod tests {
             bind: bind.to_string(),
             line_size_vw: 4.5,
             min_line_size_vw: 2.0,
+            image_path: None,
+            image_text_top: None,
+            image_text_bottom: None,
+            image_show_timeout: 0,
         }
     }
 

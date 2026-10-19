@@ -178,6 +178,13 @@ The `websocket` sink serves the display page on `bind`; the page itself is
 settings at `/settings.js`, so `line_size_vw` and `min_line_size_vw` are the only
 knobs for the text size on the big screen.
 
+The page can also hold a poster while there is nothing to translate: `image_path`
+points at a picture (PNG, JPEG, GIF, WebP, AVIF or SVG), `image_text_top` and
+`image_text_bottom` put a line above and below it, and `image_show_timeout` is the
+number of seconds without a new translation before the poster appears. The poster
+is shown from the very start as well, before the first phrase — so the screen is
+never an empty rectangle while the run is being prepared.
+
 The translated speech always has a local playback: `core.output_device` names the
 device it goes to, `default` is the system default output, and `none` turns the
 local playback off while the voice sinks keep receiving the audio. Voice sinks

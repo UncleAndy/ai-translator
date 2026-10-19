@@ -262,6 +262,10 @@ mod tests {
             bind: "не адрес".to_string(),
             line_size_vw: 4.5,
             min_line_size_vw: 2.0,
+            image_path: None,
+            image_text_top: None,
+            image_text_bottom: None,
+            image_show_timeout: 0,
         }]);
 
         let error = App::build(&cfg).err().expect("сборка отказана");

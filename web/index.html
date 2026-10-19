@@ -19,6 +19,12 @@
   перевода размер не меняется: ужимается он только тогда, когда фраза иначе
   не поместится. При открытии страницы как файла настройки не приходят и
   остаются значения по умолчанию.
+
+  Заставка приходит оттуда же, полем poster: url картинки (приёмник отдаёт её по
+  /poster и читает файл на каждый запрос), text_top и text_bottom — надписи над
+  и под картинкой, timeout — сколько секунд без нового перевода ждать перед
+  показом. Заставка видна сразу после открытия страницы, пока перевода ещё не
+  было, и возвращается в каждой паузе; первый же перевод её убирает.
 -->
 <html lang="ru">
 <head>
@@ -103,11 +109,53 @@
   }
 
   #status.off { color: #ff5c5c; opacity: 0.9; }
+
+  /* Заставка: показывается, когда переводить нечего — до первого перевода и в
+     паузах. Картинка по центру, надпись сверху и снизу страницы. */
+  #poster {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6vh 4vw;
+    background: var(--bg);
+    text-align: center;
+  }
+
+  #poster[hidden] { display: none; }
+
+  .poster-text {
+    font-size: clamp(18px, 2.6vw, 64px);
+    font-weight: 600;
+    line-height: 1.2;
+    max-width: 92vw;
+    overflow-wrap: anywhere;
+    color: var(--accent);
+  }
+
+  #poster-bottom { color: #fff; opacity: 0.85; }
+
+  #poster-image {
+    max-width: 92vw;
+    max-height: 66vh;
+    object-fit: contain;
+    border-radius: 1vmin;
+  }
+
+  /* Пустой текст не должен съедать место у картинки. */
+  .poster-text:empty { display: none; }
 </style>
 </head>
 <body>
 <div id="status" class="off">подключение…</div>
 <main id="stage"><div id="lines"></div></main>
+<div id="poster" hidden>
+  <div id="poster-top" class="poster-text"></div>
+  <img id="poster-image" alt="">
+  <div id="poster-bottom" class="poster-text"></div>
+</div>
 <!-- Настройки показа отдаёт приёмник (ScreenSettings в sink/text/websocket.rs).
      Когда страница открыта как файл, скрипт не загружается и остаются значения
      по умолчанию из кода ниже. -->
@@ -133,6 +181,49 @@ function setting(name) {
 const BASE_LINE_SIZE = setting("line_size_vw");
 const MIN_LINE_SIZE = setting("min_line_size_vw");
 const LINE_STEP = 0.25;
+
+/* Заставка. Приёмник отдаёт её вместе с настройками, когда в конфигурации задана
+   картинка: url картинки, надписи сверху и снизу и время простоя в секундах,
+   после которого заставка появляется. */
+const POSTER = (configured.poster && typeof configured.poster === "object") ? configured.poster : null;
+/* Пауза, после которой заставка уместна при timeout = 0: иначе она мигала бы
+   между соседними словами идущего перевода. */
+const POSTER_MIN_MS = 500;
+const POSTER_CHECK_MS = 250;
+
+const posterEl = document.getElementById("poster");
+const posterTopEl = document.getElementById("poster-top");
+const posterBottomEl = document.getElementById("poster-bottom");
+const posterImageEl = document.getElementById("poster-image");
+
+/* Когда пришёл последний перевод. Ноль означает, что перевода ещё не было:
+   тогда заставка показывается сразу, как только страница открылась. */
+let lastTranslationAt = 0;
+
+const posterTimeoutMs = POSTER
+  ? Math.max(0, Number(POSTER.timeout) || 0) * 1000 || POSTER_MIN_MS
+  : 0;
+
+function setupPoster() {
+  if (!POSTER) return;
+
+  posterTopEl.textContent = typeof POSTER.text_top === "string" ? POSTER.text_top : "";
+  posterBottomEl.textContent = typeof POSTER.text_bottom === "string" ? POSTER.text_bottom : "";
+  if (typeof POSTER.url === "string" && POSTER.url.length > 0) {
+    posterImageEl.src = POSTER.url;
+  }
+  refreshPoster();
+}
+
+function refreshPoster() {
+  if (!POSTER) {
+    posterEl.hidden = true;
+    return;
+  }
+
+  const idle = Date.now() - lastTranslationAt;
+  posterEl.hidden = idle < posterTimeoutMs;
+}
 
 const stageEl = document.getElementById("stage");
 const linesEl = document.getElementById("lines");
@@ -226,6 +317,10 @@ function onTranslation(message) {
     lastSeq.set(line, message.seq);
   }
 
+  // Пришёл новый перевод — заставке здесь не место.
+  lastTranslationAt = Date.now();
+  refreshPoster();
+
   // Текст финального события относится к завершаемой фразе, поэтому сначала
   // записываем его в текущую фразу и только потом отпускаем её.
   const phrase = current || startPhrase();
@@ -287,6 +382,9 @@ document.addEventListener("mousemove", () => {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => { document.body.style.cursor = "none"; }, 5000);
 });
+
+setupPoster();
+setInterval(refreshPoster, POSTER_CHECK_MS);
 
 connect();
 </script>

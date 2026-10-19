@@ -6,7 +6,7 @@
 
 ```sh
 bash packaging/build-all.sh
-nix shell nixpkgs#gh -c gh release create v0.1.0 --verify-tag --generate-notes dist/*
+nix shell nixpkgs#gh -c gh release create v0.2.0 --verify-tag --generate-notes dist/*
 ```
 
 Первая собирает всё в `dist/` и кладёт туда же `SHA256SUMS`. Вторая создаёт релиз с уже существующего тега и прикладывает к нему файлы из `dist/` — имя тега обязано совпадать с версией в `Cargo.toml`.
@@ -17,12 +17,12 @@ nix shell nixpkgs#gh -c gh release create v0.1.0 --verify-tag --generate-notes d
 FEATURES=telegram-call bash packaging/build-all.sh
 ```
 
-Для этого варианта в образе сборки нужен `zlib1g-dev` (он уже добавлен в `packaging/Dockerfile.linux`), а под NixOS локальная сборка требует `RUSTFLAGS="-L $(nix eval --raw nixpkgs#zlib.outPath)/lib"`.
+Для этого варианта в образе сборки нужен `zlib1g-dev` (он уже добавлен в `packaging/Dockerfile.linux`). Под NixOS сборка и запуск идут через `packaging/run-nix.sh`, отдельных переменных не нужно.
 
 Тег ставится отдельно, до публикации:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag -a v0.2.0 -m "ai-translator 0.2.0" && git push origin v0.2.0
 ```
 
 ## Что получается в `dist/`

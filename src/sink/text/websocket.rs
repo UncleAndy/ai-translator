@@ -31,12 +31,29 @@ const PAGE: &str = include_str!("../../../web/index.html");
 /// comes from the configuration: it is fixed for the whole session and only
 /// shrinks (down to [`ScreenSettings::min_line_size_vw`]) when a long phrase
 /// would not fit the screen otherwise.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScreenSettings {
     /// Translation font size, in percent of the screen width.
     pub line_size_vw: f64,
     /// Lower bound the font shrinks to when a phrase does not fit.
     pub min_line_size_vw: f64,
+    /// Poster shown while nothing is translated; `None` without an image.
+    pub poster: Option<Poster>,
+}
+
+/// The page the screen shows when there is nothing to translate.
+///
+/// A picture in the middle with a line of text above and below it: the screen
+/// keeps something on it during the pauses instead of a black rectangle.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Poster {
+    /// Text above the image.
+    pub text_top: String,
+    /// Text below the image.
+    pub text_bottom: String,
+    /// Seconds without a new translation before the poster appears; zero shows
+    /// it as soon as the screen has nothing newer to display.
+    pub timeout_secs: u64,
 }
 
 impl Default for ScreenSettings {
@@ -44,6 +61,7 @@ impl Default for ScreenSettings {
         Self {
             line_size_vw: 4.5,
             min_line_size_vw: 2.0,
+            poster: None,
         }
     }
 }
@@ -55,12 +73,26 @@ impl ScreenSettings {
     /// served (the page is opened as a file), the page falls back to the same
     /// values.
     pub fn to_script(&self) -> String {
-        format!(
-            "window.TRANSLATOR_SETTINGS = {{\"line_size_vw\": {}, \"min_line_size_vw\": {}}};\n",
-            self.line_size_vw, self.min_line_size_vw
-        )
+        let mut settings = serde_json::json!({
+            "line_size_vw": self.line_size_vw,
+            "min_line_size_vw": self.min_line_size_vw,
+        });
+
+        if let Some(poster) = &self.poster {
+            settings["poster"] = serde_json::json!({
+                "url": POSTER_URL,
+                "text_top": poster.text_top,
+                "text_bottom": poster.text_bottom,
+                "timeout": poster.timeout_secs,
+            });
+        }
+
+        format!("window.TRANSLATOR_SETTINGS = {settings};\n")
     }
 }
+
+/// Path the page asks the poster image from.
+const POSTER_URL: &str = "/poster";
 
 /// Shared state of the display server.
 #[derive(Clone)]
@@ -69,6 +101,8 @@ struct ScreenState {
     tx: broadcast::Sender<String>,
     /// Settings the page asks for.
     settings: ScreenSettings,
+    /// Poster image, read on every request.
+    image: Option<std::path::PathBuf>,
 }
 
 /// A message sent to the big-screen page.
@@ -143,6 +177,9 @@ pub struct WebsocketSink {
     addr: SocketAddr,
     tx: broadcast::Sender<String>,
     settings: ScreenSettings,
+    /// Poster image read from disk on every request, so it can be replaced
+    /// while the screen is up.
+    image: Option<std::path::PathBuf>,
     /// Listening socket, until the server task takes it over.
     listener: Option<std::net::TcpListener>,
     stop_tx: watch::Sender<bool>,
@@ -162,7 +199,12 @@ impl WebsocketSink {
     ///
     /// Returns an error when the address is not a `host:port` socket address or
     /// cannot be occupied.
-    pub fn new(id: &str, bind: &str, settings: ScreenSettings) -> Result<Self> {
+    pub fn new(
+        id: &str,
+        bind: &str,
+        settings: ScreenSettings,
+        image: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
         let requested: SocketAddr = bind.parse().map_err(|e| {
             SinkError::Protocol(format!("некорректный адрес прослушивания {bind}: {e}"))
         })?;
@@ -181,6 +223,7 @@ impl WebsocketSink {
             addr,
             tx,
             settings,
+            image,
             listener: Some(listener),
             stop_tx,
             last_source: String::new(),
@@ -193,7 +236,7 @@ impl WebsocketSink {
 
     /// Display settings handed to the page.
     pub fn settings(&self) -> ScreenSettings {
-        self.settings
+        self.settings.clone()
     }
 
     /// Address the server actually listens on.
@@ -221,7 +264,8 @@ impl WebsocketSink {
             Ok(_) => spawn_server(
                 listener,
                 self.tx.clone(),
-                self.settings,
+                self.settings.clone(),
+                self.image.clone(),
                 self.stop_tx.subscribe(),
             ),
             Err(_) => self.listener = Some(listener),
@@ -268,6 +312,7 @@ fn router(state: ScreenState) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/settings.js", get(settings_script))
+        .route("/poster", get(poster_image))
         .route("/ws", get(upgrade))
         .with_state(state)
 }
@@ -275,6 +320,72 @@ fn router(state: ScreenState) -> Router {
 /// Serve the embedded page.
 async fn page() -> Html<&'static str> {
     Html(PAGE)
+}
+
+/// Serve the poster image the page shows while nothing is translated.
+///
+/// The file is read on every request, so the picture can be replaced while the
+/// screen is up; a missing or unreadable file answers with a plain error and the
+/// page keeps the black background.
+async fn poster_image(State(state): State<ScreenState>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let Some(path) = state.image else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            "картинка не задана в конфигурации".to_string(),
+        )
+            .into_response();
+    };
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (axum::http::header::CONTENT_TYPE, image_content_type(&path)),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(
+                "экран перевода: картинка {} не прочитана: {error}",
+                path.display()
+            );
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                format!("картинка не прочитана: {error}"),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Content type of the poster image, taken from its extension.
+fn image_content_type(path: &std::path::Path) -> &'static str {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Serve the display settings as a script the page loads.
@@ -327,6 +438,7 @@ fn spawn_server(
     listener: std::net::TcpListener,
     tx: broadcast::Sender<String>,
     settings: ScreenSettings,
+    image: Option<std::path::PathBuf>,
     mut stop: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
@@ -346,9 +458,16 @@ fn spawn_server(
             }
         };
 
-        if let Err(error) = axum::serve(listener, router(ScreenState { tx, settings }))
-            .with_graceful_shutdown(shutdown)
-            .await
+        if let Err(error) = axum::serve(
+            listener,
+            router(ScreenState {
+                tx,
+                settings,
+                image,
+            }),
+        )
+        .with_graceful_shutdown(shutdown)
+        .await
         {
             tracing::error!("экран перевода: сервер остановлен с ошибкой: {error}");
         }
@@ -390,13 +509,14 @@ mod tests {
 
     #[test]
     fn rejects_unusable_listen_address() {
-        let err = WebsocketSink::new("screen", "не-адрес", ScreenSettings::default()).unwrap_err();
+        let err =
+            WebsocketSink::new("screen", "не-адрес", ScreenSettings::default(), None).unwrap_err();
         assert!(matches!(err, SinkError::Protocol(_)), "{err:?}");
     }
 
     #[test]
     fn occupies_the_requested_address() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default(), None)
             .expect("адрес занят");
         assert!(sink.addr().ip().is_loopback());
         assert_ne!(sink.addr().port(), 0, "порт назначает система");
@@ -520,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn serves_the_page_over_http() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default(), None)
             .expect("адрес занят");
         let addr = sink.addr();
 
@@ -552,8 +672,10 @@ mod tests {
         let settings = ScreenSettings {
             line_size_vw: 7.5,
             min_line_size_vw: 3.0,
+            poster: None,
         };
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0", settings).expect("адрес занят");
+        let sink =
+            WebsocketSink::new("screen", "127.0.0.1:0", settings, None).expect("адрес занят");
         let addr = sink.addr();
 
         let mut stream = TcpStream::connect(addr)
@@ -576,18 +698,114 @@ mod tests {
             "скрипт отдаётся с типом JavaScript: {answer}"
         );
         assert!(
-            answer.contains("\"line_size_vw\": 7.5"),
+            answer.contains("\"line_size_vw\":7.5"),
             "размер из настройки: {answer}"
         );
         assert!(
-            answer.contains("\"min_line_size_vw\": 3"),
+            answer.contains("\"min_line_size_vw\":3"),
             "предел ужимания из настройки: {answer}"
         );
     }
 
     #[tokio::test]
+    async fn serves_the_poster_from_the_configured_image() {
+        let dir = std::env::temp_dir().join(format!("ait-poster-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let image = dir.join("stand.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\n-not-really-a-png").expect("картинка");
+
+        let settings = ScreenSettings {
+            line_size_vw: 4.5,
+            min_line_size_vw: 2.0,
+            poster: Some(Poster {
+                text_top: "MTL Fest".to_string(),
+                text_bottom: "english translation".to_string(),
+                timeout_secs: 5,
+            }),
+        };
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", settings, Some(image.clone()))
+            .expect("адрес занят");
+        let addr = sink.addr();
+
+        let script = http_get(addr, "/settings.js").await;
+        assert!(
+            script.contains("\"poster\""),
+            "заставка объявлена в настройках: {script}"
+        );
+        assert!(
+            script.contains("\"url\":\"/poster\""),
+            "адрес картинки: {script}"
+        );
+        assert!(script.contains("\"text_top\":\"MTL Fest\""), "{script}");
+        assert!(
+            script.contains("\"text_bottom\":\"english translation\""),
+            "{script}"
+        );
+        assert!(script.contains("\"timeout\":5"), "{script}");
+
+        let answer = http_get(addr, "/poster").await;
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        assert!(answer.contains("image/png"), "тип из расширения: {answer}");
+        assert!(
+            answer.contains("no-store"),
+            "картинку не кэшируем: {answer}"
+        );
+        assert!(
+            answer.contains("-not-really-a-png"),
+            "тело картинки: {answer}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_poster_is_absent_without_an_image() {
+        let script = ScreenSettings::default().to_script();
+
+        assert!(
+            !script.contains("poster"),
+            "без картинки заставки нет: {script}"
+        );
+        assert!(script.contains("\"line_size_vw\":4.5"), "{script}");
+    }
+
+    #[test]
+    fn the_image_type_follows_the_extension() {
+        use std::path::Path;
+
+        assert_eq!(image_content_type(Path::new("a.PNG")), "image/png");
+        assert_eq!(image_content_type(Path::new("a.jpeg")), "image/jpeg");
+        assert_eq!(image_content_type(Path::new("a.webp")), "image/webp");
+        assert_eq!(
+            image_content_type(Path::new("a.unknown")),
+            "application/octet-stream"
+        );
+    }
+
+    /// GET one path and read the whole answer as text.
+    ///
+    /// The poster test asks for a binary image, so the body is decoded lossily:
+    /// the assertions only look at the headers and at the readable part.
+    async fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
+        let mut stream = TcpStream::connect(addr).await.expect("подключение");
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("запрос отправлен");
+
+        let mut answer = Vec::new();
+        stream
+            .read_to_end(&mut answer)
+            .await
+            .expect("ответ прочитан");
+        String::from_utf8_lossy(&answer).into_owned()
+    }
+
+    #[tokio::test]
     async fn broadcasts_translation_to_a_connected_screen() {
-        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default(), None)
             .expect("адрес занят");
         let (mut screen, rest) = connect_screen(sink.addr()).await;
 
@@ -606,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_text_is_attached_to_the_translation() {
-        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+        let mut sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default(), None)
             .expect("адрес занят");
         let (mut screen, rest) = connect_screen(sink.addr()).await;
 
@@ -627,7 +845,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_stops_the_server() {
-        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default())
+        let sink = WebsocketSink::new("screen", "127.0.0.1:0", ScreenSettings::default(), None)
             .expect("адрес занят");
         let addr = sink.addr();
 

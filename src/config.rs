@@ -83,6 +83,22 @@ pub enum TextSinkConfig {
         /// Lower bound the font shrinks to when a phrase does not fit.
         #[serde(default = "default_min_line_size_vw")]
         min_line_size_vw: f64,
+        /// Poster image shown on the big screen while nothing is being
+        /// translated: a path to a PNG, JPEG, GIF, WebP, AVIF or SVG file.
+        #[serde(default)]
+        image_path: Option<std::path::PathBuf>,
+        /// Text above the poster image.
+        #[serde(default)]
+        image_text_top: Option<String>,
+        /// Text below the poster image.
+        #[serde(default)]
+        image_text_bottom: Option<String>,
+        /// Seconds without a new translation before the poster appears.
+        ///
+        /// Zero shows the poster as soon as the screen has nothing newer to
+        /// display, including the very start of the run.
+        #[serde(default)]
+        image_show_timeout: u64,
     },
     /// Write the transcript and the translation to a file.
     Transcript {
@@ -554,6 +570,73 @@ fn default_min_line_size_vw() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_screen_poster_comes_from_the_configuration() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "websocket"
+            enabled = true
+            image_path = "/tmp/stand.png"
+            image_text_top = "MTL Fest"
+            image_text_bottom = "english translation"
+            image_show_timeout = 7
+        "#,
+        )
+        .unwrap();
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Websocket {
+                image_path,
+                image_text_top,
+                image_text_bottom,
+                image_show_timeout,
+                ..
+            } => {
+                assert_eq!(
+                    image_path.as_deref(),
+                    Some(std::path::Path::new("/tmp/stand.png"))
+                );
+                assert_eq!(image_text_top.as_deref(), Some("MTL Fest"));
+                assert_eq!(image_text_bottom.as_deref(), Some("english translation"));
+                assert_eq!(*image_show_timeout, 7);
+            }
+            other => panic!("не тот приёмник: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_screen_poster_is_off_unless_configured() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "websocket"
+            enabled = true
+        "#,
+        )
+        .unwrap();
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Websocket {
+                image_path,
+                image_text_top,
+                image_text_bottom,
+                image_show_timeout,
+                ..
+            } => {
+                assert!(image_path.is_none());
+                assert!(image_text_top.is_none());
+                assert!(image_text_bottom.is_none());
+                assert_eq!(*image_show_timeout, 0);
+            }
+            other => panic!("не тот приёмник: {other:?}"),
+        }
+    }
 
     #[test]
     fn playback_device_accepts_none_but_not_an_empty_name() {
