@@ -35,6 +35,13 @@ instructions were not.
   version.
 - `README.md` and `docs/release.md` no longer tell the reader to clear the mark
   from a single file or to open the application from the disk image.
+- An error reported by the translation service used to reach the reader as
+  `Transport error: invalid value: map, expected map with a single key`, and the
+  session closed without a word about the cause: the error body was modelled as an
+  enum where the API sends an object of several fields. The message, code and
+  offending parameter are now printed as they arrive, a frame that cannot be parsed
+  is shown with its text, and the realtime backend no longer drops error events at
+  all. Fixed in `transono`.
 
 ## [0.2.1] - 2026-10-19
 
