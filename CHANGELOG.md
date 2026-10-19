@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The release that turns the translator into a broadcaster: the translation can now
 be published into Telegram, as text in a channel and as live speech in a voice
-chat or a channel livestream.
+chat or a channel livestream, and the big screen shows a poster with a picture and
+two lines of text instead of a black rectangle while there is nothing to translate.
 
 ### Added
 
@@ -59,13 +60,23 @@ chat or a channel livestream.
 
 #### Big screen
 
-- New poster options for the `websocket` display sink: `image_path` (a picture
-  shown while nothing is translated), `image_text_top` and `image_text_bottom`
-  (a line above and below the picture), and `image_show_timeout` (seconds without
-  a new translation before the poster appears). The poster is served at `/poster`
-  and read from disk on every request, so the file can be replaced while the
-  translation runs. It is on screen from the start of the run, before the first
-  phrase, and returns in every pause.
+- New poster for the `websocket` display sink: a picture in the middle of the
+  screen with one line of text above it and one below, shown whenever there is
+  nothing to translate.
+- Configuration: `image_path` (the picture: PNG, JPEG, GIF, WebP, AVIF or SVG),
+  `image_text_top` and `image_text_bottom` (the lines above and below it), and
+  `image_show_timeout` (seconds without a new translation before the poster
+  appears; zero means the first pause). Without `image_path` there is no poster
+  and the screen behaves as before.
+- The picture is served by the sink at `/poster` and read from disk on every
+  request, so it can be replaced while the translation runs; the content type
+  follows the extension and caching is off.
+- The poster is on screen from the moment the page opens — before the first
+  phrase — disappears as soon as a translation arrives, and comes back in every
+  pause. At `image_show_timeout = 0` a pause still has to last half a second, so
+  the poster does not flicker between the words of a running phrase.
+- The page asks for the poster through `/settings.js`, next to the text sizes, so
+  a screen that is already open picks up a changed configuration on reload.
 
 #### Playback
 
