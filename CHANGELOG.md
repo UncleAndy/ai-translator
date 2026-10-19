@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-19
+
+A packaging release: the voice-chat sink now travels in the Apple Silicon macOS
+packages too, and the engine can be linked on macOS at all.
+
+### Changed
+
+- The Apple Silicon macOS packages (`.tar.gz` and `.dmg`) now carry the
+  voice-chat sink: the engine is fetched for `aarch64-apple-darwin`, shipped as
+  `libntgcalls.dylib` beside the binary and resolved at `@loader_path`. The Intel
+  macOS packages stay as the engine requires — built without the feature, and the
+  binary refuses a configuration with `telegram_call` and says why.
+- The `ntgcalls-sys` crate is vendored in `vendor/`: its build script handed GNU
+  linker options (`--allow-shlib-undefined`, `-rpath`) to the linker whenever the
+  engine was a shared library, and ld64 rejects both. The vendored copy passes
+  them to the Linux linker only, so the macOS cross build links at all.
+- `packaging/build-all.sh` passes `FEATURES` to the macOS builds; the macOS build
+  image gained `curl` and `unzip` and is tagged `1.95-call`, so it is rebuilt once.
+- `docs/release.md` and `docs/voice-chat.md` state the target matrix: Linux
+  x86_64, Linux arm64 and macOS arm64 carry the sink, Intel macOS does not.
+- The engine is an ordinary shared dependency of the binary, not a library opened
+  on demand: the program needs the file to start at all, `--version` included. In
+  the Linux tarball it lies next to the binary, in `.deb` and `.rpm` it goes to
+  `/usr/lib/ai-translator` and is reached through the relative rpath
+  (`$ORIGIN/../lib/ai-translator`); on Apple Silicon it lies next to the binary at
+  `@loader_path`. A binary copied out of the package on its own will not run.
+
+### Known limits
+
+- The Apple Silicon package is cross-built on Linux and has not been run on a real
+  Mac yet: the sink is verified on Linux only.
+
 ## [0.2.0] - 2026-10-19
 
 The release that turns the translator into a broadcaster: the translation can now
@@ -104,17 +136,10 @@ two lines of text instead of a black rectangle while there is nothing to transla
 - The voice-chat build is no longer statically linked against the engine. A static
   copy brought its own C++ runtime and allocator into the process and the program
   stopped working — even when the sink was disabled. The binary went from 60 MB to
-  19 MB and the engine travels beside it as an LGPL-3.0 shared library, loaded only
-  when a call starts.
+  19 MB and the engine travels beside it as an LGPL-3.0 shared library, found
+  through a path relative to the binary.
 - The Nix dev shell carries the C++ runtime and zlib of the engine, so the engine
   loads on NixOS without extra setup.
-- The Apple Silicon macOS packages now carry the voice-chat sink too, with the
-  engine beside the binary at `@loader_path`. The Intel macOS packages keep to what
-  the engine can do there: they are built without the feature.
-- The `ntgcalls-sys` crate is vendored in `vendor/`. Its build script handed GNU
-  linker options to the linker whenever the engine was a shared library
-  (`--allow-shlib-undefined`, `-rpath`), and ld64 — the macOS linker — rejects both;
-  the vendored copy passes them to the Linux linker only.
 
 ### Fixed
 
@@ -167,5 +192,6 @@ once.
 - Documentation: `docs/release.md`, `docs/macos-cross-build.md`,
   `docs/TZ_ai-translator_v0.1.md`.
 
+[0.2.1]: https://github.com/UncleAndy/ai-translator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/UncleAndy/ai-translator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/UncleAndy/ai-translator/releases/tag/v0.1.0

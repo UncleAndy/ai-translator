@@ -6,7 +6,7 @@
 
 ```sh
 bash packaging/build-all.sh
-nix shell nixpkgs#gh -c gh release create v0.2.0 --verify-tag --generate-notes dist/*
+nix shell nixpkgs#gh -c gh release create v0.2.1 --verify-tag --generate-notes dist/*
 ```
 
 Первая собирает всё в `dist/` и кладёт туда же `SHA256SUMS`. Вторая создаёт релиз с уже существующего тега и прикладывает к нему файлы из `dist/` — имя тега обязано совпадать с версией в `Cargo.toml`.
@@ -24,7 +24,7 @@ FEATURES=telegram-call bash packaging/build-all.sh
 Тег ставится отдельно, до публикации:
 
 ```sh
-git tag -a v0.2.0 -m "ai-translator 0.2.0" && git push origin v0.2.0
+git tag -a v0.2.1 -m "ai-translator 0.2.1" && git push origin v0.2.1
 ```
 
 ## Что получается в `dist/`
