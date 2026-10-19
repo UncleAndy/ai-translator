@@ -47,17 +47,35 @@ use crate::sink::{Result, SinkError, VoiceSink};
 /// Rate the call expects.
 pub const CALL_RATE: u32 = 48_000;
 
-/// One 20 ms frame of the call.
-pub const FRAME_SAMPLES: usize = (CALL_RATE as usize / 1000) * 20;
-
-/// How often a frame goes out.
-const FRAME_INTERVAL: Duration = Duration::from_millis(20);
-
-/// How many frames may wait for the call before the oldest is dropped.
+/// One frame of the call: ten milliseconds, four hundred and eighty samples.
 ///
-/// Speech that waits longer than a second is no longer a translation of what is
-/// being said, so the sink keeps the newest speech instead of falling behind.
-const MAX_QUEUED_FRAMES: usize = 50;
+/// The engine hands its own sink a frame every ten milliseconds and takes a
+/// frame of that length from the outside. A longer chunk at a longer interval
+/// leaves every second slot without audio, which is heard as clicking and
+/// stuttering.
+pub const FRAME_SAMPLES: usize = (CALL_RATE as usize / 1000) * 10;
+
+/// How often a frame goes out: the engine consumes one every ten milliseconds.
+const FRAME_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How many frames may wait for the call before the oldest is given up.
+///
+/// The provider hands a phrase over faster than it is spoken, so the sink has to
+/// hold it and give it to the call in real time. Dropping part of a phrase is
+/// what makes the broadcast stutter and click, therefore the backlog is measured
+/// in tens of seconds and only a runaway stream hits the limit.
+const MAX_QUEUED_FRAMES: usize = (1000 / 10) * 60;
+
+/// How many frames of speech must gather before the call starts speaking them:
+/// a hundred milliseconds of cushion against an uneven provider.
+const PRIME_FRAMES: usize = 10;
+
+/// How long the sound fades between speech and silence, in samples of the call.
+const EDGE_FADE: usize = (CALL_RATE as usize / 1000) * 5;
+
+/// How far apart two neighbouring samples of the speech may be at a seam before
+/// the join is smoothed, in units of the full scale.
+const SEAM_JUMP: f32 = 0.08;
 
 /// Parameters of the voice-chat sink.
 pub struct TelegramCallSettings {
@@ -90,6 +108,12 @@ impl std::fmt::Debug for TelegramCallSettings {
 /// so the cheapest interpolation that keeps the timbre is enough. Chunks are
 /// interpolated inside themselves, which costs at most one sample at a seam of a
 /// few milliseconds and never shifts the timeline.
+///
+/// A provider hands the phrase over in chunks that do not meet sample to sample:
+/// the last sample of one chunk and the first of the next may sit far apart, and
+/// a hard join there is heard as a click. Such a seam is bridged by a short
+/// ramp, and only when the jump is audible — chunks that continue each other are
+/// left untouched.
 #[derive(Debug)]
 pub struct Packer {
     in_rate: u32,
@@ -97,6 +121,8 @@ pub struct Packer {
     position: f64,
     /// Output samples that do not fill a frame yet.
     pending: Vec<i16>,
+    /// Last input sample of the previous chunk, for the seam check.
+    last: Option<f32>,
 }
 
 impl Packer {
@@ -106,6 +132,7 @@ impl Packer {
             in_rate,
             position: 0.0,
             pending: Vec::new(),
+            last: None,
         }
     }
 
@@ -115,6 +142,38 @@ impl Packer {
             return;
         }
 
+        match self.bridged(mono) {
+            Some(joined) => self.push_bridged(&joined),
+            None => self.push_bridged(mono),
+        }
+    }
+
+    /// A version of the chunk with a ramp in front, when it starts far from where
+    /// the previous one ended.
+    fn bridged(&self, mono: &[f32]) -> Option<Vec<f32>> {
+        let previous = self.last?;
+        let first = mono[0];
+
+        if (first - previous).abs() <= SEAM_JUMP {
+            return None;
+        }
+
+        // Two milliseconds of the input rate: long enough to remove the step,
+        // short enough to stay inaudible.
+        let length = (self.in_rate as usize / 500).max(2);
+        let mut joined: Vec<f32> = (0..length)
+            .map(|index| {
+                let fraction = index as f32 / length as f32;
+                previous + (first - previous) * fraction
+            })
+            .collect();
+        joined.extend_from_slice(mono);
+
+        Some(joined)
+    }
+
+    /// Append samples that have already been joined.
+    fn push_bridged(&mut self, mono: &[f32]) {
         let step = f64::from(self.in_rate) / f64::from(CALL_RATE);
         let mut position = self.position;
         let last = mono.len() as f64;
@@ -134,6 +193,7 @@ impl Packer {
         }
 
         self.position = position - last;
+        self.last = mono.last().copied();
     }
 
     /// Take one frame, when a whole one has gathered.
@@ -175,7 +235,7 @@ struct Live {
 pub struct TelegramCallSink {
     id: String,
     settings: TelegramCallSettings,
-    task: Option<mpsc::Sender<Command>>,
+    task: Option<mpsc::UnboundedSender<Command>>,
     packer: Option<Packer>,
 }
 
@@ -218,7 +278,7 @@ impl TelegramCallSink {
 
     /// Start the task that owns the engine and wait until the call is joined.
     async fn join(&mut self) -> Result<()> {
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::unbounded_channel();
         spawn_engine(rx)
             .map_err(|e| SinkError::Unavailable(format!("движок звонка не запустился: {e}")))?;
 
@@ -232,7 +292,6 @@ impl TelegramCallSink {
         });
 
         tx.send(Command::Join { settings, reply })
-            .await
             .map_err(|_| SinkError::Unavailable("движок звонка не запустился".into()))?;
 
         match answer.await {
@@ -304,7 +363,7 @@ impl VoiceSink for TelegramCallSink {
         while let Some(frame) = packer.frame() {
             // A full queue is not an error: the newest speech wins over a
             // backlog that would otherwise translate the past.
-            let _ = task.try_send(Command::Frame(frame));
+            let _ = task.send(Command::Frame(frame));
         }
 
         Ok(())
@@ -313,7 +372,7 @@ impl VoiceSink for TelegramCallSink {
     async fn shutdown(mut self: Box<Self>) -> Result<()> {
         if let Some(task) = self.task.take() {
             let (reply, answer) = oneshot::channel();
-            if task.send(Command::Leave { reply }).await.is_ok() {
+            if task.send(Command::Leave { reply }).is_ok() {
                 let _ = answer.await;
             }
             tracing::info!("трансляция остановлена, звонок покинут");
@@ -327,7 +386,7 @@ impl VoiceSink for TelegramCallSink {
 ///
 /// The engine cannot leave its thread, so the task gets a whole runtime instead
 /// of a slot in the shared one; the sink talks to it through the channel.
-fn spawn_engine(commands: mpsc::Receiver<Command>) -> std::io::Result<()> {
+fn spawn_engine(commands: mpsc::UnboundedReceiver<Command>) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("telegram-call".into())
         .spawn(move || {
@@ -349,12 +408,22 @@ fn spawn_engine(commands: mpsc::Receiver<Command>) -> std::io::Result<()> {
 }
 
 /// The task that owns the media engine: joins the call, then sends it frames.
-async fn engine_task(mut commands: mpsc::Receiver<Command>) {
+async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>) {
     let engine = NTgCalls::new();
     let mut live: Option<Live> = None;
     let mut queue: std::collections::VecDeque<Vec<i16>> = std::collections::VecDeque::new();
     let silence = vec![0i16; FRAME_SAMPLES];
-    let mut ticker = tokio::time::interval(FRAME_INTERVAL);
+    // The next frame is due at an absolute moment: a send that took longer than
+    // the interval must not make the frames after it hurry one after another,
+    // which is heard as a burst and a dropout.
+    let mut due = tokio::time::Instant::now();
+    // Where the speech last stopped, so silence can start from there.
+    let mut tail = 0i16;
+    let mut given_up = 0usize;
+    // Speech starts only when a cushion has gathered: the provider hands the
+    // phrase over unevenly, and starting on the very first frame makes the call
+    // run dry in the middle of a word.
+    let mut primed = false;
 
     loop {
         tokio::select! {
@@ -365,6 +434,8 @@ async fn engine_task(mut commands: mpsc::Receiver<Command>) {
                         match answer {
                             Ok(joined) => {
                                 live = Some(joined);
+                                due = tokio::time::Instant::now();
+                                primed = false;
                                 let _ = reply.send(Ok(()));
                             }
                             Err(reason) => {
@@ -373,8 +444,16 @@ async fn engine_task(mut commands: mpsc::Receiver<Command>) {
                         }
                     }
                     Some(Command::Frame(frame)) => {
-                        if queue.len() >= MAX_QUEUED_FRAMES {
+                        while queue.len() >= MAX_QUEUED_FRAMES {
                             queue.pop_front();
+                            given_up += 1;
+                        }
+                        if given_up > 0 {
+                            tracing::warn!(
+                                "звонок отстаёт: {} кадров речи пропущено",
+                                given_up
+                            );
+                            given_up = 0;
                         }
                         queue.push_back(frame);
                     }
@@ -383,19 +462,44 @@ async fn engine_task(mut commands: mpsc::Receiver<Command>) {
                             leave_call(&engine, joined).await;
                         }
                         queue.clear();
+                        primed = false;
                         let _ = reply.send(());
                     }
                     None => break,
                 }
             }
-            _ = ticker.tick(), if live.is_some() => {
+            _ = tokio::time::sleep_until(due), if live.is_some() => {
                 let Some(joined) = live.as_ref() else {
                     continue;
                 };
 
-                let frame = queue.pop_front().unwrap_or_else(|| silence.clone());
+                if !primed && queue.len() >= PRIME_FRAMES {
+                    primed = true;
+                }
+
+                let frame = if primed && !queue.is_empty() {
+                    let frame = queue.pop_front().expect("очередь не пуста");
+                    tail = frame.last().copied().unwrap_or(0);
+                    frame
+                } else {
+                    if primed {
+                        primed = false;
+                    }
+                    // Nothing is waiting: the call hears silence that starts
+                    // where the speech ended, not a step down to zero.
+                    let frame = fade_out(tail, &silence);
+                    tail = 0;
+                    frame
+                };
+
                 if let Err(error) = send_frame(&engine, joined.call_id, &frame).await {
                     tracing::warn!("кадр не отправлен в звонок: {error}");
+                }
+
+                due += FRAME_INTERVAL;
+                let now = tokio::time::Instant::now();
+                if due < now {
+                    due = now;
                 }
             }
         }
@@ -404,6 +508,24 @@ async fn engine_task(mut commands: mpsc::Receiver<Command>) {
     if let Some(joined) = live.take() {
         leave_call(&engine, joined).await;
     }
+}
+
+/// Silence that starts at the level the speech stopped at and fades down, so the
+/// join between them is not a step.
+fn fade_out(tail: i16, silence: &[i16]) -> Vec<i16> {
+    if tail == 0 {
+        return silence.to_vec();
+    }
+
+    let mut frame = silence.to_vec();
+    let length = EDGE_FADE.min(frame.len());
+
+    for (index, sample) in frame.iter_mut().take(length).enumerate() {
+        let fraction = 1.0 - index as f32 / length as f32;
+        *sample = (f32::from(tail) * fraction) as i16;
+    }
+
+    frame
 }
 
 /// Put one frame of speech into the call.
@@ -720,7 +842,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_second_of_speech_is_fifty_frames() {
+    fn a_second_of_speech_is_a_hundred_frames() {
         let input = vec![0.2f32; CALL_RATE as usize];
         let mut packer = Packer::new(CALL_RATE);
         packer.push(&input);
@@ -733,7 +855,7 @@ mod tests {
             samples += frame.len();
         }
 
-        assert_eq!(frames, 50, "двадцать миллисекунд на кадр");
+        assert_eq!(frames, 100, "десять миллисекунд на кадр");
         assert_eq!(samples, CALL_RATE as usize);
     }
 
@@ -771,6 +893,55 @@ mod tests {
         assert!(
             (16_000..=16_400).contains(&peak),
             "половина шкалы — примерно 16383: {peak}"
+        );
+    }
+
+    #[test]
+    fn a_jump_between_chunks_is_smoothed() {
+        // The provider hands a phrase over in chunks: this one ends at half the
+        // scale, the next starts at the opposite half. A hard join is a click.
+        let mut packer = Packer::new(CALL_RATE);
+        packer.push(&vec![0.5f32; 1_000]);
+        packer.push(&vec![-0.5f32; 1_000]);
+
+        let frame = packer.frame().expect("кадр собран");
+        let jump = frame
+            .windows(2)
+            .map(|pair| (pair[1] as i32 - pair[0] as i32).abs())
+            .max()
+            .unwrap_or(0);
+
+        assert!(jump < 2_000, "стык сглажен, а не ступенькой: скачок {jump}");
+    }
+
+    #[test]
+    fn chunks_that_continue_each_other_are_left_alone() {
+        let mut packer = Packer::new(CALL_RATE);
+        packer.push(&vec![0.0f32; 1_000]);
+        packer.push(&vec![0.0f32; 1_000]);
+
+        assert_eq!(
+            packer.backlog(),
+            2_000,
+            "без лишней перемычки сэмплов ровно вдвое меньше кадров"
+        );
+    }
+
+    #[test]
+    fn silence_starts_where_the_speech_ended() {
+        let silence = vec![0i16; FRAME_SAMPLES];
+        let frame = fade_out(i16::MAX / 2, &silence);
+
+        assert_eq!(frame.len(), FRAME_SAMPLES);
+        assert!(frame[0] > i16::MAX / 2 - 10, "начало на уровне речи");
+        assert_eq!(frame[EDGE_FADE], 0, "через пять миллисекунд — тишина");
+    }
+
+    #[test]
+    fn a_runaway_stream_gives_up_a_minute_of_speech_at_most() {
+        assert_eq!(
+            MAX_QUEUED_FRAMES, 6_000,
+            "шестьдесят секунд по десять миллисекунд"
         );
     }
 
