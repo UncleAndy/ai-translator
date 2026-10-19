@@ -54,9 +54,10 @@ two lines of text instead of a black rectangle while there is nothing to transla
 - The joins between provider chunks, and between speech and silence, are ramped
   instead of stepped: a hard join there is heard as a click.
 - Feature `telegram-call` (off by default). The engine is available for Linux
-  x86_64, Linux arm64 and macOS arm64; a build without the feature, or on an
-  unsupported architecture, refuses a configuration with `telegram_call` and says
-  why.
+  x86_64, Linux arm64 and macOS arm64, and the release packages for those three
+  carry the sink. A build without the feature, or on a target the engine does not
+  exist for — Intel macOS among them — refuses a configuration with
+  `telegram_call` and says why.
 
 #### Big screen
 
@@ -107,6 +108,13 @@ two lines of text instead of a black rectangle while there is nothing to transla
   when a call starts.
 - The Nix dev shell carries the C++ runtime and zlib of the engine, so the engine
   loads on NixOS without extra setup.
+- The Apple Silicon macOS packages now carry the voice-chat sink too, with the
+  engine beside the binary at `@loader_path`. The Intel macOS packages keep to what
+  the engine can do there: they are built without the feature.
+- The `ntgcalls-sys` crate is vendored in `vendor/`. Its build script handed GNU
+  linker options to the linker whenever the engine was a shared library
+  (`--allow-shlib-undefined`, `-rpath`), and ld64 — the macOS linker — rejects both;
+  the vendored copy passes them to the Linux linker only.
 
 ### Fixed
 
@@ -122,10 +130,11 @@ two lines of text instead of a black rectangle while there is nothing to transla
 
 ### Known limits
 
-- macOS: the release packages of this version are built without the voice-chat
-  sink — `packaging/build-all.sh` passes `FEATURES` to the Linux build only, and
-  cross-building the engine for macOS is not wired yet. The sink has not been run
-  on a real Mac; Intel macOS cannot run it at all.
+- macOS: the Apple Silicon package carries the voice-chat sink and the Intel one
+  cannot — the engine has no build for that architecture, so the Intel binary is
+  made without the feature and refuses a configuration with `telegram_call`. The
+  Apple Silicon package is cross-built on Linux and has not been run on a real Mac
+  yet: the sink is verified on Linux only.
 - The `.AppImage` on NixOS was not re-checked after the engine became a shared
   library; `packaging/run-nix.sh` is the supported way to run there.
 - Packages are unsigned: macOS has an ad-hoc signature and no notarisation, Linux

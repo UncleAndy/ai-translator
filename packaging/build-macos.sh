@@ -31,22 +31,74 @@ STRIP="${STRIP:-strip}"
 echo "== ai-translator $VERSION, $AIT_TARGET =="
 test -n "$VERSION"
 
+# The voice-chat sink streams through the media engine, and the engine exists for
+# Apple Silicon only. An Intel build drops the feature and the program refuses a
+# configuration with `telegram_call`, saying exactly that.
+FEATURES="${FEATURES:-}"
+CALL_LIB=""
+call_flags=""
+if [[ ",$FEATURES," == *",telegram-call,"* ]]; then
+  if [ "$AIT_TARGET" = "aarch64-apple-darwin" ]; then
+    ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh aarch64-apple-darwin)"
+    CALL_LIB="$ENGINE_DIR/lib/libntgcalls.dylib"
+    test -f "$CALL_LIB"
+
+    # The engine is a shared library beside the binary: a static copy would drag
+    # its own C++ runtime into the process, which is exactly what broke the Linux
+    # build. The rpath is the directory of the binary itself.
+    export NTGCALLS_DYLIB=1
+    export NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")"
+    # The library names its own dependencies (libz, libc++, the frameworks), so
+    # only the place it lies next to the binary has to be said.
+    call_flags="-C link-arg=-Wl,-rpath,@loader_path"
+  else
+    echo "-- voice-chat sink: no engine for $AIT_TARGET, building without it" >&2
+    kept=""
+    IFS=',' read -r -a wanted <<< "$FEATURES"
+    for feature in "${wanted[@]}"; do
+      [ -z "$feature" ] && continue
+      [ "$feature" = "telegram-call" ] && continue
+      kept="${kept:+$kept,}$feature"
+    done
+    FEATURES="$kept"
+  fi
+fi
+
+BUILD=(cargo build --release --locked --target "$AIT_TARGET")
+if [ -n "$FEATURES" ]; then
+  BUILD+=(--features "$FEATURES")
+fi
+
+# Every flag below belongs to the target, so that build scripts for the host are
+# left alone.
+flag="CARGO_TARGET_$(printf '%s' "$AIT_TARGET" | tr 'a-z-' 'A-Z_')_RUSTFLAGS"
+
+if [ -n "$call_flags" ]; then
+  export "$flag"="${!flag:-} $call_flags"
+fi
+
 # Outside macOS the linker has to add the ad-hoc signature itself: Apple Silicon
-# refuses to start a binary that has none at all. The flag is target-specific so
-# that build scripts for the host are left alone.
+# refuses to start a binary that has none at all.
 if ! command -v codesign >/dev/null; then
-  flag="CARGO_TARGET_$(printf '%s' "$AIT_TARGET" | tr 'a-z-' 'A-Z_')_RUSTFLAGS"
   export "$flag"="${!flag:-} -C link-arg=-adhoc_codesign"
 
   # C code (ring, the audio backend) needs the osxcross compiler by name: cc-rs
   # reads CC_<target> with the dashes turned into underscores.
   triple_u=$(printf '%s' "$AIT_TARGET" | tr '-' '_')
-  cc=$(command -v "$AIT_TARGET-cc" || ls /usr/local/osxcross/target/bin/"$AIT_TARGET"*-cc 2>/dev/null | head -1)
-  cxx=$(command -v "$AIT_TARGET-c++" || ls /usr/local/osxcross/target/bin/"$AIT_TARGET"*-c++ 2>/dev/null | head -1)
-  export "CC_$triple_u=$cc" "CXX_$triple_u=$cxx"
+  cc=$(command -v "$AIT_TARGET-cc" || true)
+  if [ -z "$cc" ]; then
+    cc=$(ls /usr/local/osxcross/target/bin/"$AIT_TARGET"*-cc 2>/dev/null | head -1 || true)
+  fi
+  cxx=$(command -v "$AIT_TARGET-c++" || true)
+  if [ -z "$cxx" ]; then
+    cxx=$(ls /usr/local/osxcross/target/bin/"$AIT_TARGET"*-c++ 2>/dev/null | head -1 || true)
+  fi
+  if [ -n "$cc" ] && [ -n "$cxx" ]; then
+    export "CC_$triple_u=$cc" "CXX_$triple_u=$cxx"
+  fi
 fi
 
-cargo build --release --locked --target "$AIT_TARGET"
+"${BUILD[@]}"
 
 rm -rf "$DIST" "$WORK"
 mkdir -p "$DIST" "$WORK"
@@ -67,6 +119,17 @@ STAGE="$WORK/$NAME-$VERSION"
 mkdir -p "$STAGE"
 install -m 0755 "$WORK/$NAME" "$STAGE/$NAME"
 cp -r examples README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
+
+# The engine travels next to the binary, where its rpath looks. Apple Silicon
+# refuses to load an unsigned arm64 library, so it is signed the same way the
+# binary is; the prebuilt library of the engine usually carries its own ad-hoc
+# signature already.
+if [ -n "$CALL_LIB" ]; then
+  install -m 0755 "$CALL_LIB" "$STAGE/libntgcalls.dylib"
+  if command -v codesign >/dev/null; then
+    codesign --force --sign - "$STAGE/libntgcalls.dylib"
+  fi
+fi
 
 tar -czf "$DIST/$NAME-$VERSION-$ARCH-macos.tar.gz" -C "$WORK" "$NAME-$VERSION"
 

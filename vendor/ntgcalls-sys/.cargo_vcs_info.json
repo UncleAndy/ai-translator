@@ -1,0 +1,7 @@
+{
+  "git": {
+    "sha1": "c4f7fa93f7d5a4e5667210a21ea34b1850c8616c",
+    "dirty": true
+  },
+  "path_in_vcs": "targets/rust/ntgcalls-sys"
+}

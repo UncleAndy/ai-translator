@@ -15,7 +15,7 @@ ROOT=$(pwd)
 PARENT=$(dirname "$ROOT")
 VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
 LINUX_IMAGE=ai-translator-linux-builder:24.04
-MACOS_IMAGE=ai-translator-macos-builder:1.95
+MACOS_IMAGE=ai-translator-macos-builder:1.95-call
 DMG_IMAGE=ai-translator-dmg-builder:24.04
 
 echo "== ai-translator $VERSION =="
@@ -75,6 +75,7 @@ for target in aarch64-apple-darwin x86_64-apple-darwin; do
     -e WORK="/work/ai-translator/build/macos/$arch/work" \
     -e STRIP=llvm-strip \
     -e RUSTUP_TOOLCHAIN=1.95.0 \
+    -e FEATURES="${FEATURES:-}" \
     "$MACOS_IMAGE" bash packaging/build-macos.sh
 
   echo "-- macOS $arch: disk image (hfsprogs + libdmg-hfsplus)"

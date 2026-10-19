@@ -68,3 +68,10 @@ rpassword = { version = "7", optional = true }
 tempfile = "3"
 # The audio spec of the probe comes from the same crate transono uses.
 symphonia = "0.6"
+
+[patch.crates-io]
+# The engine is loaded as a shared library, and the upstream build script emits
+# GNU linker options in that mode. ld64, the macOS linker, rejects them, so the
+# crate is vendored with a build script that speaks to each linker in its own
+# language.
+ntgcalls-sys = { path = "vendor/ntgcalls-sys" }

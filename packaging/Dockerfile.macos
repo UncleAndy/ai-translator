@@ -4,3 +4,9 @@
 FROM rust-darwin-builder:1.95
 
 RUN rustup target add --toolchain 1.95.0 x86_64-apple-darwin aarch64-apple-darwin
+
+# The media engine of the voice-chat sink is fetched as an archive, so the build
+# needs curl and unzip next to the toolchain.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+ && rm -rf /var/lib/apt/lists/*

@@ -2668,8 +2668,6 @@ dependencies = [
 [[package]]
 name = "ntgcalls-sys"
 version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1418e3d049635dbbc3acce4edf04c89139efb482d6ee3650671abdc1789a23a0"
 dependencies = [
  "ureq",
  "zip",
