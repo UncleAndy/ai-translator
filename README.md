@@ -158,6 +158,9 @@ enabled = true
 [[sink.text]]
 type = "websocket"
 enabled = true
+# The screen listens on 127.0.0.1 unless you say otherwise. A hall needs
+# 0.0.0.0 to be reachable from another machine; `check` then warns that anyone
+# on the network can read the translation and the settings.
 bind = "0.0.0.0:8643"
 # Translation size in percent of the screen width, and the lower bound it
 # shrinks to when a long phrase does not fit. The size stays fixed while the

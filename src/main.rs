@@ -162,6 +162,10 @@ fn check(path: &std::path::Path) -> ExitCode {
         Err(code) => return code,
     };
 
+    for warning in cfg.warnings() {
+        eprintln!("предупреждение: {warning}");
+    }
+
     let problems = cfg.validate();
 
     if problems.is_empty() {
@@ -183,6 +187,10 @@ async fn run(path: &std::path::Path) -> ExitCode {
         Ok(cfg) => cfg,
         Err(code) => return code,
     };
+
+    for warning in cfg.warnings() {
+        eprintln!("предупреждение: {warning}");
+    }
 
     let mut app = match App::build(&cfg) {
         Ok(app) => app,

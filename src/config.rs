@@ -296,6 +296,35 @@ impl Config {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 
+    /// Notes that do not stop the run but are worth saying out loud.
+    ///
+    /// A screen bound to every interface is a working setup for a hall, and a
+    /// questionable one everywhere else: whoever reaches the port reads every
+    /// translation and the settings. The user asked for it explicitly, so this is
+    /// a warning and not a refusal.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+
+        for sink in &self.sink.text {
+            let TextSinkConfig::Websocket {
+                enabled: true,
+                bind,
+                ..
+            } = sink
+            else {
+                continue;
+            };
+
+            if !is_loopback(bind) {
+                notes.push(format!(
+                    "экран слушает {bind}: перевод и настройки увидит любой, кто дотянется до порта"
+                ));
+            }
+        }
+
+        notes
+    }
+
     /// Check the configuration without starting any translation.
     ///
     /// Disabled sinks are not checked: a sink that is switched off is not
@@ -553,8 +582,19 @@ fn default_telegram_session_file() -> String {
     format!("{base}/ai-translator/telegram-user.session")
 }
 
+/// Only this machine by default: the screen shows everything that is said, and a
+/// hall that needs it on the network says so in its own configuration.
 fn default_bind() -> String {
-    "0.0.0.0:8642".to_string()
+    "127.0.0.1:8642".to_string()
+}
+
+/// Whether an address listens on this machine only.
+fn is_loopback(bind: &str) -> bool {
+    let host = match bind.rsplit_once(':') {
+        Some((host, _port)) => host.trim_matches(['[', ']']),
+        None => bind,
+    };
+    matches!(host, "localhost" | "::1" | "0:0:0:0:0:0:0:1") || host.starts_with("127.")
 }
 
 /// Translation font size, in percent of the screen width.
@@ -881,12 +921,74 @@ mod tests {
                 min_line_size_vw,
                 ..
             } => {
-                assert_eq!(bind, "0.0.0.0:8642");
+                assert_eq!(bind, "127.0.0.1:8642", "экран открыт только себе");
+                assert!(cfg.warnings().is_empty(), "тишина, пока не просили сеть");
                 assert_eq!(*line_size_vw, 4.5, "размер по умолчанию");
                 assert_eq!(*min_line_size_vw, 2.0, "предел ужимания по умолчанию");
             }
             other => panic!("ожидался приёмник websocket, получено {other:?}"),
         }
+    }
+
+    /// A hall needs the screen on the network; that is allowed, but said out loud.
+    #[test]
+    fn a_screen_on_every_interface_is_reported_as_a_warning() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "websocket"
+            bind = "0.0.0.0:8642"
+        "#,
+        )
+        .unwrap();
+
+        let warnings = cfg.warnings();
+        assert_eq!(warnings.len(), 1, "одно предупреждение: {warnings:?}");
+        assert!(warnings[0].contains("0.0.0.0:8642"), "{warnings:?}");
+        assert!(cfg.validate().is_empty(), "и всё же это не отказ");
+    }
+
+    /// Loopback in its several spellings is not worth a word.
+    #[test]
+    fn loopback_addresses_are_not_warned_about() {
+        for bind in [
+            "127.0.0.1:8642",
+            "localhost:8642",
+            "[::1]:8642",
+            "127.0.0.5:9000",
+        ] {
+            assert!(is_loopback(bind), "{bind} — этот же компьютер");
+        }
+        for bind in [
+            "0.0.0.0:8642",
+            "[::]:8642",
+            "192.168.1.10:8642",
+            "10.0.0.2:8642",
+        ] {
+            assert!(!is_loopback(bind), "{bind} — сеть");
+        }
+    }
+
+    /// A disabled screen is not bound at all, so it cannot be exposed.
+    #[test]
+    fn a_disabled_screen_is_not_warned_about() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+            [[sink.text]]
+            type = "websocket"
+            enabled = false
+            bind = "0.0.0.0:8642"
+            [[sink.text]]
+            type = "console"
+        "#,
+        )
+        .unwrap();
+
+        assert!(cfg.warnings().is_empty(), "{:?}", cfg.warnings());
     }
 
     #[test]
