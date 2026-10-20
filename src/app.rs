@@ -21,11 +21,16 @@ use crate::supervisor::{RestartPolicy, SinkState, Supervisor};
 /// intermediate revisions.
 const SINK_CAPACITY: usize = 256;
 
-/// How long a sink is given between restart attempts.
+/// How long a sink waits before the first restart; the delay doubles after that.
 const RESTART_DELAY: Duration = Duration::from_millis(500);
 
-/// How many times a sink is restarted after a failure.
-const RESTART_ATTEMPTS: u32 = 2;
+/// Ceiling of the restart delay: half a minute is long enough for a network to
+/// come back, and short enough that a broadcast is not lost for a whole session.
+const RESTART_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// How many times a sink is restarted after a failure. Six attempts with the
+/// doubling delay span about half a minute of trouble.
+const RESTART_ATTEMPTS: u32 = 6;
 
 /// Why the application could not be assembled or run.
 #[derive(Debug, thiserror::Error)]
@@ -86,7 +91,8 @@ impl App {
         let bus = EventBus::new();
         let supervisor = Supervisor::new(
             bus.clone(),
-            RestartPolicy::limited(RESTART_ATTEMPTS, RESTART_DELAY),
+            RestartPolicy::limited(RESTART_ATTEMPTS, RESTART_DELAY)
+                .with_max_delay(RESTART_MAX_DELAY),
         )
         .with_capacity(SINK_CAPACITY);
 

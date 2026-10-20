@@ -22,18 +22,34 @@ use crate::sink::{Result, TextSink, VoiceSink};
 const DEFAULT_CAPACITY: usize = 64;
 
 /// Restart policy of a failed sink.
+///
+/// The delay doubles with every attempt up to [`RestartPolicy::max_delay`]: a sink
+/// that failed because the network is down should not be hammered, and a sink that
+/// failed because of a hiccup should come back soon.
 #[derive(Debug, Clone, Copy)]
 pub struct RestartPolicy {
     /// Maximum number of restarts.
     pub attempts: u32,
-    /// Delay before a restart.
+    /// Delay before the first restart.
     pub delay: Duration,
+    /// Ceiling the doubling stops at.
+    pub max_delay: Duration,
 }
 
 impl RestartPolicy {
-    /// A limited number of attempts with a delay.
+    /// A limited number of attempts, the delay doubling up to `delay * 64`.
     pub fn limited(attempts: u32, delay: Duration) -> Self {
-        Self { attempts, delay }
+        Self {
+            attempts,
+            delay,
+            max_delay: delay.saturating_mul(64),
+        }
+    }
+
+    /// The same policy with an explicit ceiling.
+    pub fn with_max_delay(mut self, max_delay: Duration) -> Self {
+        self.max_delay = max_delay;
+        self
     }
 
     /// Never restart a failed sink.
@@ -41,7 +57,18 @@ impl RestartPolicy {
         Self {
             attempts: 0,
             delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
         }
+    }
+
+    /// How long to wait before the restart numbered `attempt` (counting from 1).
+    pub fn wait_for(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return self.delay;
+        }
+        let shift = (attempt - 1).min(16);
+        let delay = self.delay.saturating_mul(1u32 << shift);
+        delay.min(self.max_delay)
     }
 }
 
@@ -427,8 +454,14 @@ async fn drain(sink: &mut SinkKind, subscriber: &mut Subscriber) {
 async fn restart(id: &str, slot: &SinkSlot, policy: RestartPolicy, attempt: u32) -> u32 {
     let attempt = attempt + 1;
     slot.set(SinkState::Restarting { attempt });
-    tracing::debug!(sink = %id, attempt, "перезапуск приёмника");
-    tokio::time::sleep(policy.delay).await;
+    let wait = policy.wait_for(attempt);
+    tracing::debug!(
+        sink = %id,
+        attempt,
+        wait_ms = wait.as_millis() as u64,
+        "перезапуск приёмника"
+    );
+    tokio::time::sleep(wait).await;
     attempt
 }
 
@@ -780,5 +813,30 @@ mod tests {
         assert!(states[0].1.is_running());
 
         supervisor.shutdown().await;
+    }
+
+    /// A sink that keeps failing must not be restarted in a tight loop: the wait
+    /// doubles, and a long outage is waited out at the ceiling.
+    #[test]
+    fn the_restart_delay_doubles_up_to_the_ceiling() {
+        let policy = RestartPolicy::limited(6, Duration::from_millis(500))
+            .with_max_delay(Duration::from_secs(30));
+
+        let waits: Vec<u64> = (1..=6)
+            .map(|attempt| policy.wait_for(attempt).as_millis() as u64)
+            .collect();
+
+        assert_eq!(waits, vec![500, 1_000, 2_000, 4_000, 8_000, 16_000]);
+        assert_eq!(policy.wait_for(7), Duration::from_secs(30));
+        assert_eq!(policy.wait_for(64), Duration::from_secs(30));
+    }
+
+    /// The default ceiling is derived from the first delay, so a sink with a slow
+    /// first attempt is not capped below it.
+    #[test]
+    fn the_ceiling_follows_the_first_delay() {
+        let policy = RestartPolicy::limited(3, Duration::from_secs(2));
+        assert_eq!(policy.wait_for(1), Duration::from_secs(2));
+        assert_eq!(policy.max_delay, Duration::from_secs(128));
     }
 }
