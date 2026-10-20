@@ -77,6 +77,21 @@ const EDGE_FADE: usize = (CALL_RATE as usize / 1000) * 5;
 /// the join is smoothed, in units of the full scale.
 const SEAM_JUMP: f32 = 0.08;
 
+/// How long the account is given to enter the call. Without a bound a join that
+/// Telegram never answers holds the sink in limbo that looks exactly like a
+/// working one.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many frames in a row the call may refuse before it is called gone. Twenty
+/// frames are a fifth of a second: a call that lags that long has dropped out,
+/// and silence from now on would be lost without a word.
+const FAILED_FRAMES_BEFORE_RESTART: u32 = 20;
+
+/// How often a refused frame is reported. The task produces a hundred frames a
+/// second, and a hundred lines of log per second hide the reason instead of
+/// telling it.
+const FAILURE_REPORT_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Parameters of the voice-chat sink.
 pub struct TelegramCallSettings {
     /// Group or channel whose call carries the broadcast.
@@ -224,6 +239,95 @@ enum Command {
     Leave { reply: oneshot::Sender<()> },
 }
 
+/// What the frame task knows about the call, and the sink needs to know too.
+///
+/// The engine lives on its own thread and cannot hand the sink an error: it is
+/// the sink's `on_audio` that must fail for the supervisor to restart it. This
+/// cell is the shortest honest bridge between the two — the task writes the
+/// reason, the sink reads it at the next frame of speech.
+#[derive(Debug, Default)]
+struct CallHealth {
+    broken: std::sync::Mutex<Option<String>>,
+}
+
+impl CallHealth {
+    /// Call the stream dead, keeping the first reason: later frames of the same
+    /// broken call have nothing to add.
+    fn mark_broken(&self, reason: String) {
+        let mut slot = self
+            .broken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_none() {
+            *slot = Some(reason);
+        }
+    }
+
+    /// The reason the stream died, if it has.
+    fn reason(&self) -> Option<String> {
+        self.broken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Forget an old failure: a new join starts with a clean slate.
+    fn reset(&self) {
+        self.broken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+/// What to do about a frame the call did not take.
+#[derive(Debug, PartialEq, Eq)]
+enum Failure {
+    /// Say it out loud, no more often than once a second.
+    Report,
+    /// Enough: the call is not taking audio any more.
+    GiveUp,
+}
+
+/// Counts frames the call refused in a row.
+#[derive(Debug, Default)]
+struct FrameFailures {
+    consecutive: u32,
+    last_reported: Option<tokio::time::Instant>,
+}
+
+impl FrameFailures {
+    /// Note a refused frame and say what, if anything, deserves a word.
+    fn record(&mut self, now: tokio::time::Instant) -> Option<Failure> {
+        self.consecutive += 1;
+
+        if self.consecutive >= FAILED_FRAMES_BEFORE_RESTART {
+            return Some(Failure::GiveUp);
+        }
+
+        let due = self
+            .last_reported
+            .is_none_or(|at| now.duration_since(at) >= FAILURE_REPORT_INTERVAL);
+
+        if due {
+            self.last_reported = Some(now);
+            Some(Failure::Report)
+        } else {
+            None
+        }
+    }
+
+    /// The call took a frame: the stream is alive.
+    fn recovered(&mut self) {
+        self.consecutive = 0;
+    }
+
+    /// How many frames in a row were refused.
+    fn consecutive(&self) -> u32 {
+        self.consecutive
+    }
+}
+
 /// The call the task is streaming into.
 struct Live {
     call_id: i64,
@@ -237,6 +341,8 @@ pub struct TelegramCallSink {
     settings: TelegramCallSettings,
     task: Option<mpsc::UnboundedSender<Command>>,
     packer: Option<Packer>,
+    /// Filled by the frame task when the call stops taking audio.
+    health: Arc<CallHealth>,
 }
 
 impl std::fmt::Debug for TelegramCallSink {
@@ -273,13 +379,25 @@ impl TelegramCallSink {
             settings,
             task: None,
             packer: None,
+            health: Arc::new(CallHealth::default()),
         })
+    }
+
+    /// Declare the call dead: the next frame of speech fails the sink, and the
+    /// supervisor brings up a fresh one that joins again.
+    ///
+    /// The frame task holds the health cell itself and does not need this; the
+    /// method is the way for anyone else — a test, or a future supervisor of the
+    /// call — to report that the stream is gone.
+    pub fn report_broken(&self, reason: impl Into<String>) {
+        self.health.mark_broken(reason.into());
     }
 
     /// Start the task that owns the engine and wait until the call is joined.
     async fn join(&mut self) -> Result<()> {
         let (tx, rx) = mpsc::unbounded_channel();
-        spawn_engine(rx)
+        self.health.reset();
+        spawn_engine(rx, Arc::clone(&self.health))
             .map_err(|e| SinkError::Unavailable(format!("движок звонка не запустился: {e}")))?;
 
         let (reply, answer) = oneshot::channel();
@@ -314,6 +432,12 @@ impl VoiceSink for TelegramCallSink {
     }
 
     async fn on_audio(&mut self, _line: LineId, audio: &Audio) -> Result<()> {
+        // The frame task cannot fail the sink itself: it says why the call died
+        // here, and the supervisor takes it from there — a fresh sink joins anew.
+        if let Some(reason) = self.health.reason() {
+            return Err(SinkError::Unavailable(reason));
+        }
+
         if self.task.is_none() {
             tracing::info!(
                 "первый звук у приёмника: вхожу в звонок {}",
@@ -362,8 +486,13 @@ impl VoiceSink for TelegramCallSink {
 
         while let Some(frame) = packer.frame() {
             // A full queue is not an error: the newest speech wins over a
-            // backlog that would otherwise translate the past.
-            let _ = task.send(Command::Frame(frame));
+            // backlog that would otherwise translate the past. A closed channel
+            // is: the engine task is gone, and nothing will carry the speech.
+            if task.send(Command::Frame(frame)).is_err() {
+                return Err(SinkError::Unavailable(
+                    "движок звонка остановился: трансляция прервана".into(),
+                ));
+            }
         }
 
         Ok(())
@@ -386,7 +515,10 @@ impl VoiceSink for TelegramCallSink {
 ///
 /// The engine cannot leave its thread, so the task gets a whole runtime instead
 /// of a slot in the shared one; the sink talks to it through the channel.
-fn spawn_engine(commands: mpsc::UnboundedReceiver<Command>) -> std::io::Result<()> {
+fn spawn_engine(
+    commands: mpsc::UnboundedReceiver<Command>,
+    health: Arc<CallHealth>,
+) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("telegram-call".into())
         .spawn(move || {
@@ -402,14 +534,15 @@ fn spawn_engine(commands: mpsc::UnboundedReceiver<Command>) -> std::io::Result<(
             };
 
             let local = tokio::task::LocalSet::new();
-            runtime.block_on(local.run_until(engine_task(commands)));
+            runtime.block_on(local.run_until(engine_task(commands, health)));
         })
         .map(|_| ())
 }
 
 /// The task that owns the media engine: joins the call, then sends it frames.
-async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>) {
+async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>, health: Arc<CallHealth>) {
     let engine = NTgCalls::new();
+    let mut failures = FrameFailures::default();
     let mut live: Option<Live> = None;
     let mut queue: std::collections::VecDeque<Vec<i16>> = std::collections::VecDeque::new();
     let silence = vec![0i16; FRAME_SAMPLES];
@@ -430,16 +563,26 @@ async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>) {
             command = commands.recv() => {
                 match command {
                     Some(Command::Join { settings, reply }) => {
-                        let answer = join_call(&engine, &settings).await;
+                        // A join Telegram never answers must not hold the sink in
+                        // a limbo that looks like a working broadcast.
+                        let answer =
+                            tokio::time::timeout(JOIN_TIMEOUT, join_call(&engine, &settings)).await;
                         match answer {
-                            Ok(joined) => {
+                            Ok(Ok(joined)) => {
                                 live = Some(joined);
+                                failures = FrameFailures::default();
                                 due = tokio::time::Instant::now();
                                 primed = false;
                                 let _ = reply.send(Ok(()));
                             }
-                            Err(reason) => {
+                            Ok(Err(reason)) => {
                                 let _ = reply.send(Err(reason));
+                            }
+                            Err(_elapsed) => {
+                                let _ = reply.send(Err(format!(
+                                    "Telegram не принял вход в звонок за {} с",
+                                    JOIN_TIMEOUT.as_secs()
+                                )));
                             }
                         }
                     }
@@ -469,7 +612,7 @@ async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>) {
                 }
             }
             _ = tokio::time::sleep_until(due), if live.is_some() => {
-                let Some(joined) = live.as_ref() else {
+                let Some(call_id) = live.as_ref().map(|joined| joined.call_id) else {
                     continue;
                 };
 
@@ -492,8 +635,32 @@ async fn engine_task(mut commands: mpsc::UnboundedReceiver<Command>) {
                     frame
                 };
 
-                if let Err(error) = send_frame(&engine, joined.call_id, &frame).await {
-                    tracing::warn!("кадр не отправлен в звонок: {error}");
+                match send_frame(&engine, call_id, &frame).await {
+                    Ok(()) => failures.recovered(),
+                    Err(error) => match failures.record(tokio::time::Instant::now()) {
+                        Some(Failure::Report) => tracing::warn!(
+                            "кадр не отправлен в звонок ({} подряд): {error}",
+                            failures.consecutive()
+                        ),
+                        Some(Failure::GiveUp) => {
+                            // Silence from a dead call is not a broadcast: leave
+                            // it and let the sink fail, so the supervisor brings
+                            // up a fresh one that joins again.
+                            tracing::error!(
+                                "звонок не принимает звук ({} кадров подряд): {error}; \
+                                 выхожу из звонка, приёмник будет перезапущен",
+                                failures.consecutive()
+                            );
+                            health.mark_broken(format!("звонок не принимает звук: {error}"));
+                            if let Some(joined) = live.take() {
+                                leave_call(&engine, joined).await;
+                            }
+                            queue.clear();
+                            primed = false;
+                            tail = 0;
+                        }
+                        None => {}
+                    },
                 }
 
                 due += FRAME_INTERVAL;
@@ -964,5 +1131,96 @@ mod tests {
 
         packer.push(&[0.1f32]);
         assert!(packer.frame().is_some(), "кадр дополнился");
+    }
+
+    /// A refused frame is worth a line — but not a hundred lines a second.
+    #[test]
+    fn a_refused_frame_is_reported_once_a_second() {
+        let start = tokio::time::Instant::now();
+        let mut failures = FrameFailures::default();
+
+        assert_eq!(failures.record(start), Some(Failure::Report));
+        assert_eq!(
+            failures.record(start + Duration::from_millis(10)),
+            None,
+            "второй кадр за ту же секунду молчит"
+        );
+        assert_eq!(failures.record(start + Duration::from_millis(500)), None);
+        assert_eq!(
+            failures.record(start + Duration::from_secs(1)),
+            Some(Failure::Report),
+            "через секунду снова можно сказать"
+        );
+    }
+
+    /// A call that refuses frames in a row is gone, and the log says it once.
+    #[test]
+    fn a_call_that_refuses_frames_is_declared_gone() {
+        let start = tokio::time::Instant::now();
+        let mut failures = FrameFailures::default();
+
+        let decisions: Vec<Option<Failure>> = (0..FAILED_FRAMES_BEFORE_RESTART)
+            .map(|index| failures.record(start + Duration::from_millis(index as u64 * 10)))
+            .collect();
+
+        assert_eq!(
+            decisions.last(),
+            Some(&Some(Failure::GiveUp)),
+            "двадцатый кадр подряд — приговор"
+        );
+        assert_eq!(
+            decisions
+                .iter()
+                .filter(|decision| **decision == Some(Failure::GiveUp))
+                .count(),
+            1
+        );
+        assert_eq!(
+            decisions
+                .iter()
+                .filter(|decision| **decision == Some(Failure::Report))
+                .count(),
+            1,
+            "пятая доля секунды — это одно сообщение, а не двадцать: {decisions:?}"
+        );
+    }
+
+    /// One frame the call took and the stream is alive again.
+    #[test]
+    fn a_frame_the_call_took_clears_the_count() {
+        let start = tokio::time::Instant::now();
+        let mut failures = FrameFailures::default();
+
+        for index in 0..5 {
+            failures.record(start + Duration::from_millis(index * 10));
+        }
+        assert_eq!(failures.consecutive(), 5);
+
+        failures.recovered();
+        assert_eq!(failures.consecutive(), 0);
+        assert_ne!(
+            failures.record(start + Duration::from_secs(2)),
+            Some(Failure::GiveUp),
+            "счёт начат заново"
+        );
+    }
+
+    /// The reason a call died is what the supervisor will report, so the first
+    /// one is kept and a new join starts clean.
+    #[test]
+    fn the_first_reason_of_a_broken_call_is_kept() {
+        let health = CallHealth::default();
+        assert_eq!(health.reason(), None);
+
+        health.mark_broken("звонок не принимает звук: connection closed".into());
+        health.mark_broken("что-то другое".into());
+
+        assert_eq!(
+            health.reason().as_deref(),
+            Some("звонок не принимает звук: connection closed")
+        );
+
+        health.reset();
+        assert_eq!(health.reason(), None, "новый вход начинает с чистого листа");
     }
 }

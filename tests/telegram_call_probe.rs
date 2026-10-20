@@ -41,3 +41,38 @@ async fn the_first_chunk_of_speech_does_not_take_the_process_down() {
     println!("ответ приёмника: {answer:?}");
     assert!(answer.is_err(), "без сессии звонок не начинается");
 }
+
+/// A call that stopped taking audio must fail the sink: that error is what makes
+/// the supervisor build a fresh sink and join again. Silence is not an option.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_that_died_fails_the_sink_instead_of_swallowing_speech() {
+    let dir = std::env::temp_dir().join(format!("ai-translator-broken-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("каталог проб");
+    let session = dir.join("broken.session");
+    std::fs::write(&session, b"").expect("пустой файл сессии");
+
+    let settings = TelegramCallSettings {
+        chat_id: "@mtl_fest_en_translate".to_string(),
+        api_id: 31_099_668,
+        api_hash: "0123456789abcdef0123456789abcdef".to_string(),
+        session_file: session,
+        create_if_missing: true,
+    };
+
+    let mut sink = TelegramCallSink::new("voice-broken", settings).expect("приёмник собран");
+    sink.report_broken("звонок не принимает звук: connection closed");
+
+    let spec = AudioSpec::new(48_000, Channels::Positioned(Position::FRONT_CENTER));
+    let pcm = PcmAudio::new(spec, 480);
+    let audio = Audio::from_pcm(&pcm).expect("звук собран");
+
+    let answer = sink.on_audio(LineId(1), &audio).await;
+    let message = format!("{answer:?}");
+    assert!(answer.is_err(), "приёмник назван сломанным: {message}");
+    assert!(
+        message.contains("connection closed"),
+        "причина отказа доходит до супервизора: {message}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
