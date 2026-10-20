@@ -155,7 +155,8 @@ async fn the_application_keeps_a_healthy_sink_when_another_fails() {
         },
     ]);
 
-    let app = App::build(&cfg).expect("приложение собрано");
+    let app = App::build_with_policy(&cfg, RestartPolicy::limited(2, Duration::from_millis(20)))
+        .expect("приложение собрано");
     assert_eq!(app.publish_text(&cfg, "Один два три.").await, 3);
 
     // Приёмник вебхука отказывает на каждом событии: он должен исчерпать

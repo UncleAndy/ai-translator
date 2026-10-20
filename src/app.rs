@@ -77,6 +77,20 @@ impl App {
     /// socket, an open file — and building it twice would take that resource
     /// twice. A failure to build is reported before anything starts.
     pub fn build(cfg: &Config) -> Result<Self, AppError> {
+        Self::build_with_policy(cfg, Self::restart_policy())
+    }
+
+    /// The policy the application gives its sinks by default.
+    pub fn restart_policy() -> RestartPolicy {
+        RestartPolicy::limited(RESTART_ATTEMPTS, RESTART_DELAY).with_max_delay(RESTART_MAX_DELAY)
+    }
+
+    /// Assemble the application with an explicit restart policy.
+    ///
+    /// The default policy spans half a minute of trouble, which is right in
+    /// production and far too long for a test: the tests that watch a sink die pass
+    /// their own short policy here.
+    pub fn build_with_policy(cfg: &Config, policy: RestartPolicy) -> Result<Self, AppError> {
         let problems = cfg.validate();
         if !problems.is_empty() {
             let text = problems
@@ -89,12 +103,7 @@ impl App {
         }
 
         let bus = EventBus::new();
-        let supervisor = Supervisor::new(
-            bus.clone(),
-            RestartPolicy::limited(RESTART_ATTEMPTS, RESTART_DELAY)
-                .with_max_delay(RESTART_MAX_DELAY),
-        )
-        .with_capacity(SINK_CAPACITY);
+        let supervisor = Supervisor::new(bus.clone(), policy).with_capacity(SINK_CAPACITY);
 
         let mut ids: HashMap<String, usize> = HashMap::new();
 
