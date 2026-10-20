@@ -20,6 +20,15 @@ second of trouble, and a screen anyone on the network could read.
   has no authentication: on a shared network every translation and every setting was
   readable by anyone who reached the port. A hall that needs the screen remotely
   keeps its explicit `bind`, and `check` warns about it instead of refusing it.
+- Every field of the configuration has a default, so a file may name only what
+  differs: `[core]` and `target_lang` are optional (`target_lang` is `en`), the devices
+  are `default`, no `[sink]` section means a console sink, a transcript without a
+  `path` goes to `transcript.<format>`, and a video sink without a `device` uses the
+  system output. An empty file is a valid configuration, and `examples/config.minimal.toml`
+  shows the shortest one.
+- The configuration is strict about names: an unknown field is a parse error that
+  names the field and lists the accepted ones, rather than a typo that quietly falls
+  back to a default and makes the run do something other than the file says.
 
 ### Fixed
 

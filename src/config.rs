@@ -10,17 +10,24 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// Root configuration.
+///
+/// Every section and every field has a default, so the smallest useful
+/// configuration is a file with one line in it — and an empty file still means
+/// something definite: translate into English and print it in the terminal.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Translation core parameters.
+    #[serde(default)]
     pub core: CoreConfig,
-    /// Sinks.
+    /// Sinks: the terminal, unless the configuration says otherwise.
     #[serde(default)]
     pub sink: Sinks,
 }
 
 /// Section `[core]`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CoreConfig {
     /// Provider identifier, for example `openai/translation`.
     #[serde(default = "default_provider")]
@@ -28,7 +35,8 @@ pub struct CoreConfig {
     /// Source language (`auto` lets the provider detect it).
     #[serde(default = "default_source_lang")]
     pub source_lang: String,
-    /// Target language.
+    /// Target language: English unless the configuration says otherwise.
+    #[serde(default = "default_target_lang")]
     pub target_lang: String,
     /// Capture device (`default` is the system default device).
     #[serde(default = "default_device")]
@@ -49,7 +57,8 @@ pub struct CoreConfig {
 }
 
 /// Section `[sink]` with the arrays `[[sink.text]]` and `[[sink.voice]]`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Sinks {
     /// Text sinks.
     #[serde(default)]
@@ -59,9 +68,20 @@ pub struct Sinks {
     pub voice: Vec<VoiceSinkConfig>,
 }
 
+impl Default for Sinks {
+    /// No `[sink]` section at all means the translation is printed in the
+    /// terminal: the least surprising thing a translator can do on its own.
+    fn default() -> Self {
+        Self {
+            text: vec![TextSinkConfig::Console { enabled: true }],
+            voice: Vec::new(),
+        }
+    }
+}
+
 /// Configuration of a text sink. The type name comes from the `type` field.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TextSinkConfig {
     /// Print the translation in a terminal.
     Console {
@@ -105,7 +125,8 @@ pub enum TextSinkConfig {
         /// Whether the sink is enabled.
         #[serde(default = "yes")]
         enabled: bool,
-        /// Path to the file.
+        /// Path to the file; a name with the format's extension when omitted.
+        #[serde(default)]
         path: PathBuf,
         /// Record format.
         #[serde(default)]
@@ -121,6 +142,7 @@ pub enum TextSinkConfig {
         enabled: bool,
         /// Channel to publish into: `@name` or a numeric id. The bot must be an
         /// administrator there with the right to post.
+        #[serde(default)]
         chat_id: String,
         /// Name of the environment variable holding the bot token.
         #[serde(default = "default_telegram_token_env")]
@@ -148,9 +170,11 @@ pub enum TextSinkConfig {
         #[serde(default = "yes")]
         enabled: bool,
         /// Endpoint address.
+        #[serde(default)]
         url: String,
         /// Request body template with the substitutions `{text}`,
         /// `{source_text}`, `{is_final}`, `{seq}`, `{target_lang}`.
+        #[serde(default)]
         body_template: String,
         /// Name of the environment variable holding the token (optional).
         #[serde(default)]
@@ -197,16 +221,29 @@ pub enum TranscriptFormat {
     Jsonl,
 }
 
+impl TranscriptFormat {
+    /// File extension the format is written with.
+    pub fn extension(self) -> &'static str {
+        match self {
+            TranscriptFormat::Txt => "txt",
+            TranscriptFormat::Srt => "srt",
+            TranscriptFormat::Vtt => "vtt",
+            TranscriptFormat::Jsonl => "jsonl",
+        }
+    }
+}
+
 /// Configuration of a voice sink.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum VoiceSinkConfig {
     /// Play the translation into a virtual audio device.
     VirtualSink {
         /// Whether the sink is enabled.
         #[serde(default = "yes")]
         enabled: bool,
-        /// Device name.
+        /// Device name: `default` is the system default output.
+        #[serde(default = "default_device")]
         device: String,
         /// Monitoring volume of the original sound.
         #[serde(default)]
@@ -220,6 +257,7 @@ pub enum VoiceSinkConfig {
         #[serde(default = "yes")]
         enabled: bool,
         /// Group whose voice chat carries the broadcast: a number or `@name`.
+        #[serde(default)]
         chat_id: String,
         /// Name of the environment variable holding the `api_id` from my.telegram.org.
         #[serde(default = "default_telegram_api_id_env")]
@@ -396,8 +434,12 @@ impl Config {
                         });
                     }
                 }
+                // An empty path means the default name with the format's
+                // extension; a path of spaces is a typo worth reporting.
                 TextSinkConfig::Transcript { path, .. } => {
-                    if path.as_os_str().is_empty() {
+                    let named = path.as_os_str().is_empty();
+                    let blank = !named && path.as_os_str().to_string_lossy().trim().is_empty();
+                    if blank {
                         problems.push(ConfigProblem::Invalid {
                             field: "sink.text.transcript.path".into(),
                             reason: "пустое значение".into(),
@@ -542,6 +584,27 @@ fn default_provider() -> String {
 
 fn default_source_lang() -> String {
     "auto".to_string()
+}
+
+/// A translator with no target language is not a translator, but demanding one
+/// turns an omission into a parse error before the reader learns why. English is
+/// the default and the documentation says so.
+fn default_target_lang() -> String {
+    "en".to_string()
+}
+
+impl Default for CoreConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_provider(),
+            source_lang: default_source_lang(),
+            target_lang: default_target_lang(),
+            input_device: default_device(),
+            output_device: default_device(),
+            voice: None,
+            transcription_model: None,
+        }
+    }
 }
 
 fn default_device() -> String {
@@ -1262,5 +1325,124 @@ mod tests {
             )),
             "нужен api_id: {problems:?}"
         );
+    }
+
+    /// An empty file is a valid configuration: everything has a default, and the
+    /// defaults are definite — English, the terminal, the system devices.
+    #[test]
+    fn an_empty_file_is_a_configuration() {
+        let cfg: Config = toml::from_str("").expect("пустой файл разбирается");
+
+        assert_eq!(cfg.core.provider, "openai/translation");
+        assert_eq!(cfg.core.source_lang, "auto");
+        assert_eq!(cfg.core.target_lang, "en");
+        assert_eq!(cfg.core.input_device, "default");
+        assert_eq!(cfg.core.output_device, "default");
+        assert_eq!(cfg.sink.text.len(), 1, "перевод печатается в терминал");
+        assert_eq!(cfg.sink.text[0].kind(), "console");
+        assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
+    }
+
+    /// The smallest useful configuration names the language and nothing else.
+    #[test]
+    fn the_language_alone_is_enough() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+        "#,
+        )
+        .expect("конфигурация разбирается");
+
+        assert_eq!(cfg.core.target_lang, "ru");
+        assert!(cfg.validate().is_empty(), "{:?}", cfg.validate());
+    }
+
+    /// An omitted sink entry keeps its own defaults instead of becoming required.
+    #[test]
+    fn a_sink_keeps_its_defaults_when_the_entry_is_bare() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.text]]
+            type = "websocket"
+
+            [[sink.text]]
+            type = "transcript"
+            format = "jsonl"
+
+            [[sink.voice]]
+            type = "virtual_sink"
+        "#,
+        )
+        .expect("конфигурация разбирается");
+
+        match &cfg.sink.text[0] {
+            TextSinkConfig::Websocket { enabled, bind, .. } => {
+                assert!(*enabled, "приёмник включён, если не сказано иначе");
+                assert_eq!(bind, "127.0.0.1:8642");
+            }
+            other => panic!("ожидался экран, получено {other:?}"),
+        }
+
+        match &cfg.sink.text[1] {
+            TextSinkConfig::Transcript { path, format, .. } => {
+                assert!(path.as_os_str().is_empty(), "имя файла не задано");
+                assert_eq!(*format, TranscriptFormat::Jsonl);
+            }
+            other => panic!("ожидался транскрипт, получено {other:?}"),
+        }
+
+        match &cfg.sink.voice[0] {
+            VoiceSinkConfig::VirtualSink { device, .. } => {
+                assert_eq!(device, "default", "звук по умолчанию — системный выход");
+            }
+            other => panic!("ожидался виртуальный приёмник, получено {other:?}"),
+        }
+    }
+
+    /// A misspelt field must not quietly fall back to its default: the run would
+    /// look healthy and do something else than the file says.
+    #[test]
+    fn a_misspelt_field_is_a_parse_error() {
+        let core = toml::from_str::<Config>(
+            r#"
+            [core]
+            target_lang = "ru"
+            enabeld = false
+        "#,
+        );
+        let error = core.expect_err("опечатка в поле ядра отвергается");
+        assert!(
+            error.to_string().contains("enabeld"),
+            "ошибка называет поле: {error}"
+        );
+
+        let sink = toml::from_str::<Config>(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.text]]
+            type = "websocket"
+            line_size_vq = 9
+        "#,
+        );
+        let error = sink.expect_err("опечатка в поле приёмника отвергается");
+        assert!(
+            error.to_string().contains("line_size_vq"),
+            "ошибка называет поле: {error}"
+        );
+    }
+
+    /// The transcript format decides the extension of the file nobody named.
+    #[test]
+    fn the_transcript_extension_follows_its_format() {
+        assert_eq!(TranscriptFormat::Txt.extension(), "txt");
+        assert_eq!(TranscriptFormat::Srt.extension(), "srt");
+        assert_eq!(TranscriptFormat::Vtt.extension(), "vtt");
+        assert_eq!(TranscriptFormat::Jsonl.extension(), "jsonl");
     }
 }

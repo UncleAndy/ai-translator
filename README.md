@@ -143,6 +143,26 @@ one is refused by the configuration check with the reason, instead of disappeari
 One TOML file describes the core and every sink. Each sink has a `type` and an `enabled`
 flag; secrets are referenced through environment variables, never stored in the file.
 
+Every field has a default, so a configuration may name only what differs from it:
+
+```toml
+[core]
+target_lang = "ru"
+```
+
+That file translates into Russian, recognises the source language, uses the system
+input and output devices, and prints the result in the terminal. An empty file is
+also valid and means the same in English. The defaults are: `provider =
+"openai/translation"`, `source_lang = "auto"`, `target_lang = "en"`,
+`input_device = "default"`, `output_device = "default"`, no `[sink]` section means a
+console sink, a screen listens on `127.0.0.1:8642`, a transcript without a `path` is
+written to `transcript.<format>`, and the Telegram sinks keep their limit defaults.
+
+A field that is misspelt is a parse error, not a silent fallback to its default: the
+diagnostic names the field and lists the accepted ones. The full list of parameters
+with comments is `examples/config.all.toml`; the shortest one is
+`examples/config.minimal.toml`.
+
 ```toml
 [core]
 provider = "openai/translation"

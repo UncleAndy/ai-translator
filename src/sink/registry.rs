@@ -4,6 +4,7 @@
 //! so the registry only maps the known types onto constructors. It still owns
 //! the [`unknown_type`] helper for callers that switch on a type name by hand.
 
+use std::path::Path;
 use std::time::Duration;
 
 use super::text::console::ConsoleSink;
@@ -14,6 +15,18 @@ use super::text::websocket::{Poster, ScreenSettings, WebsocketSink};
 use super::voice::virtual_sink::VirtualSink;
 use super::{Result, SinkError, TextSink, VoiceSink};
 use crate::config::{TextSinkConfig, VoiceSinkConfig};
+
+/// Where the transcript goes when the configuration does not name a file.
+///
+/// The format decides the extension so that a `.srt` is a subtitle file and not a
+/// text file with a subtitle inside; the file lies in the working directory.
+fn transcript_path(path: &Path, format: crate::config::TranscriptFormat) -> std::path::PathBuf {
+    if path.as_os_str().is_empty() {
+        Path::new("transcript").with_extension(format.extension())
+    } else {
+        path.to_path_buf()
+    }
+}
 
 /// Build a text sink from its configuration.
 ///
@@ -52,9 +65,12 @@ pub fn build_text_sink(id: &str, cfg: &TextSinkConfig) -> Result<Box<dyn TextSin
             format,
             bilingual,
             ..
-        } => Ok(Box::new(TranscriptSink::new(
-            id, path, *format, *bilingual,
-        )?)),
+        } => {
+            let path = transcript_path(path, *format);
+            Ok(Box::new(TranscriptSink::new(
+                id, &path, *format, *bilingual,
+            )?))
+        }
         TextSinkConfig::Telegram {
             chat_id,
             token_env,
@@ -328,5 +344,25 @@ mod tests {
             "заглушка обязана честно сообщать о неготовности, получено {err:?}"
         );
         sink.shutdown().await.unwrap();
+    }
+
+    /// A transcript with no path in the configuration is named after its format.
+    #[test]
+    fn a_transcript_without_a_path_is_named_after_its_format() {
+        use crate::config::TranscriptFormat;
+
+        assert_eq!(
+            transcript_path(Path::new(""), TranscriptFormat::Srt),
+            Path::new("transcript.srt")
+        );
+        assert_eq!(
+            transcript_path(Path::new(""), TranscriptFormat::Jsonl),
+            Path::new("transcript.jsonl")
+        );
+        assert_eq!(
+            transcript_path(Path::new("/tmp/встреча.vtt"), TranscriptFormat::Srt),
+            Path::new("/tmp/встреча.vtt"),
+            "названный файл не переименовывается"
+        );
     }
 }
