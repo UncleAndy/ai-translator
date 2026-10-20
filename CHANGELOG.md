@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-10-20
+
+The failures that used to be invisible: a dropped call, a sink that gave up after a
+second of trouble, and a screen anyone on the network could read.
+
+### Changed
+
+- A failed sink is restarted six times instead of twice, and the wait doubles from
+  half a second up to half a minute. Two restarts half a second apart meant that a
+  network outage longer than a second ended a channel for the rest of the session;
+  a short hiccup is now covered in seconds and a real outage is waited out.
+- The screen listens on `127.0.0.1:8642` by default instead of `0.0.0.0:8642`. It
+  has no authentication: on a shared network every translation and every setting was
+  readable by anyone who reached the port. A hall that needs the screen remotely
+  keeps its explicit `bind`, and `check` warns about it instead of refusing it.
+
+### Fixed
+
+- The voice-chat sink did not notice that the call had stopped taking audio. A failed
+  frame was logged and the broadcast went on claiming to run while the group heard
+  silence. Twenty refused frames in a row (a fifth of a second) now declare the call
+  dead: the account leaves it, the sink returns the reason, and the supervisor builds
+  a fresh one that joins again.
+- Entering a call is bounded by thirty seconds. A join that Telegram never answered
+  held the sink in limbo that looked exactly like a working broadcast.
+- A dead engine task made the sink drop frames without a word; a closed channel is now
+  a sink failure, so it is restarted instead of muted.
+- A refused frame used to be logged a hundred times a second, which hid the reason
+  instead of telling it; it is reported once a second now.
+- `ntgcalls-sys` unpacked the engine archive with `zip` 2.6.1, which carries three
+  advisories, one critical (extraction follows symlinks out of the destination and
+  keeps SUID bits). The vendored crate now uses `zip` 9.0.5; the build script's two
+  calls are unchanged.
+- The engine archive is pinned by `sha256` for every asset of the version in use.
+  `fetch-ntgcalls.sh` refuses an archive that does not match (exit code 4) and refuses
+  a version with no pin at all (exit code 3): the engine is loaded into the process,
+  so a substituted release would have been arbitrary code.
+
 ## [0.2.2] - 2026-10-19
 
 The first start on a real Mac, and what it taught: the packages were fine, the
@@ -230,6 +268,7 @@ once.
 - Documentation: `docs/release.md`, `docs/macos-cross-build.md`,
   `docs/TZ_ai-translator_v0.1.md`.
 
+[0.2.3]: https://github.com/UncleAndy/ai-translator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/UncleAndy/ai-translator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/UncleAndy/ai-translator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/UncleAndy/ai-translator/compare/v0.1.0...v0.2.0
