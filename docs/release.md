@@ -50,7 +50,18 @@ pwsh -File packaging/build-windows.ps1
 
 Скрипт берёт версию из `Cargo.toml`, гоняет тесты (если не указан `-SkipTests`), скачивает движок через `packaging/fetch-ntgcalls.ps1` (там закреплён SHA256 архива `ntgcalls.windows-x86_64-shared_libs.zip`), собирает `--release --features telegram-call` и кладёт в `dist/` портативный ZIP с `ai-translator.exe`, `ntgcalls.dll`, лицензиями и `INSTALL-windows.txt`, рядом — файл `.sha256`. Вариант без движка: `-NoEngine`.
 
-Требуется MSVC-тулчейн (Visual Studio Build Tools с компонентом C++) и PowerShell 7. CI-задание `windows-latest` делает то же самое на каждом push — и это единственное место, где линковка с движком проверяется автоматически; пакет из CI никуда не выгружается.
+Требуется MSVC-тулчейн (Visual Studio Build Tools с компонентом C++) и PowerShell 7. CI-задание `windows-latest` делает то же самое на каждом push — и это единственное место, где линковка с движком проверяется автоматически.
+
+**Если Windows-машины нет.** Обычный прогон пакет никуда не выгружает. Но ручной запуск (`workflow_dispatch`) оставляет его артефактом прогона на 90 дней — это способ забрать файл с Linux-хоста:
+
+```sh
+gh workflow run ci.yml                      # или Actions → ci → Run workflow
+gh run watch                                # дождаться зелёного windows
+gh run download --name ai-translator-windows-x86_64 --dir ~/win-package
+cd ~/win-package && sha256sum -c *.sha256
+```
+
+Артефакт живёт только в прогоне: в репозиторий, релиз и теги он не попадает и через 90 дней исчезает.
 
 ## Почему сборка идёт в контейнерах
 

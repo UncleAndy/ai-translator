@@ -1,6 +1,12 @@
 name: ci
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # Manual runs exist for one reason: to take the Windows package out of the
+  # build when no Windows machine is at hand. Only then is the artefact kept,
+  # and it is not a release file.
+  workflow_dispatch:
 
 jobs:
   linux:
@@ -72,8 +78,7 @@ jobs:
           $env:NTGCALLS_DYLIB = '1'
           $env:NTGCALLS_LIB_DIR = $engine.LibDir
           cargo build --features telegram-call
-      # A package nobody can produce is not a release: build the ZIP here, do
-      # not upload it anywhere.
+      # A package nobody can produce is not a release: build the ZIP here.
       - name: portable package
         working-directory: ai-translator
         shell: pwsh
@@ -82,6 +87,19 @@ jobs:
           $zip = Get-ChildItem dist/ai-translator-*-x86_64-windows.zip
           if (-not $zip) { throw 'the package was not produced' }
           $zip | Format-Table Name, Length
+      # Only a manual run keeps the file: with no Windows machine at hand, this
+      # is how the package gets out. It expires by itself and never reaches the
+      # repository or a release.
+      - name: keep the package for a manual run
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-translator-windows-x86_64
+          path: |
+            ai-translator/dist/ai-translator-*-x86_64-windows.zip
+            ai-translator/dist/ai-translator-*-x86_64-windows.zip.sha256
+          if-no-files-found: error
+          retention-days: 90
 
   macos:
     runs-on: macos-latest
