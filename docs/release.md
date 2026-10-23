@@ -37,7 +37,20 @@ git tag -a v0.2.2 -m "ai-translator 0.2.1" && git push origin v0.2.2
 | `ai-translator-<версия>-x86_64.AppImage` | любой Linux x86_64 | те же библиотеки **в системе**: внутрь образа они не упаковываются |
 | `ai-translator-<версия>-aarch64-macos.tar.gz` и `-aarch64-macos.dmg` | macOS на Apple Silicon | ничего; внутри `libntgcalls.dylib`, трансляция в голосовой чат есть |
 | `ai-translator-<версия>-x86_64-macos.tar.gz` и `-x86_64-macos.dmg` | macOS на Intel | ничего; движка для этой архитектуры нет, трансляции в голосовой чат нет |
+| `ai-translator-<версия>-x86_64-windows.zip` | Windows 10/11 x86_64 | Visual C++ 2015-2022; внутри `ai-translator.exe` и `ntgcalls.dll` |
 | `SHA256SUMS` | — | контрольные суммы всех файлов |
+
+## Windows собирается на Windows
+
+`build-all.sh` покрывает Linux и macOS: обе сборки идут в контейнерах, потому что бинарник нужен для чужой системы. Для Windows это невозможно и не нужно — движок звонка там лежит в формате MSVC, поэтому сборка идёт родным тулчейном:
+
+```powershell
+pwsh -File packaging/build-windows.ps1
+```
+
+Скрипт берёт версию из `Cargo.toml`, гоняет тесты (если не указан `-SkipTests`), скачивает движок через `packaging/fetch-ntgcalls.ps1` (там закреплён SHA256 архива `ntgcalls.windows-x86_64-shared_libs.zip`), собирает `--release --features telegram-call` и кладёт в `dist/` портативный ZIP с `ai-translator.exe`, `ntgcalls.dll`, лицензиями и `INSTALL-windows.txt`, рядом — файл `.sha256`. Вариант без движка: `-NoEngine`.
+
+Требуется MSVC-тулчейн (Visual Studio Build Tools с компонентом C++) и PowerShell 7. CI-задание `windows-latest` делает то же самое на каждом push — и это единственное место, где линковка с движком проверяется автоматически; пакет из CI никуда не выгружается.
 
 ## Почему сборка идёт в контейнерах
 

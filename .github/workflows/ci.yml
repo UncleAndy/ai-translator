@@ -40,6 +40,49 @@ jobs:
           ! cargo tree --target aarch64-apple-darwin -e normal --prefix none \
             | grep -qE '^(pipewire|pipewire-sys|libspa|libspa-sys)'
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ai-translator
+      - uses: actions/checkout@v4
+        with:
+          repository: UncleAndy/transono
+          path: transono
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: ai-translator
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: ai-translator
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests
+        working-directory: ai-translator
+        run: cargo test
+      # The media engine is a native MSVC library: fetching it and building the
+      # feature is the only place where the Windows link is actually exercised.
+      - name: voice-chat sink with the engine
+        working-directory: ai-translator
+        shell: pwsh
+        run: |
+          $engine = ./packaging/fetch-ntgcalls.ps1
+          $env:NTGCALLS_DYLIB = '1'
+          $env:NTGCALLS_LIB_DIR = $engine.LibDir
+          cargo build --features telegram-call
+      # A package nobody can produce is not a release: build the ZIP here, do
+      # not upload it anywhere.
+      - name: portable package
+        working-directory: ai-translator
+        shell: pwsh
+        run: |
+          ./packaging/build-windows.ps1 -SkipTests
+          $zip = Get-ChildItem dist/ai-translator-*-x86_64-windows.zip
+          if (-not $zip) { throw 'the package was not produced' }
+          $zip | Format-Table Name, Length
+
   macos:
     runs-on: macos-latest
     steps:

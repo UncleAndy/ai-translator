@@ -298,11 +298,23 @@ async fn wait_for_stop() {
 /// translation the same way Ctrl+C does. The handlers are released when this
 /// future ends, so a repeated SIGTERM still kills a stuck process.
 async fn stop_signal() -> std::io::Result<()> {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // SIGTERM exists on Unix only: on Windows the console handler behind
+    // `ctrl_c` is the whole story, so a service there stops with Ctrl+C or
+    // with the window being closed.
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-    tokio::select! {
-        result = tokio::signal::ctrl_c() => result,
-        _ = terminate.recv() => Ok(()),
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
     }
 }
 

@@ -28,11 +28,15 @@ macOS is supported for building and running: the project builds with Xcode Comma
 and a rustup toolchain, without Nix; audio capture and playback go through CoreAudio via
 `cpal`, and the PipeWire module of `transono` is not compiled at all. The voice sink is
 unavailable there — a virtual audio device is a third-party driver the user installs — and the
-microphone permission is asked from the terminal. Both platforms are built and tested by CI on
-every push.
+microphone permission is asked from the terminal. Linux, macOS and Windows are built and tested
+by CI on every push.
 
-Windows is not supported: the audio control backend there is an unfinished stub, and the
-project has never been tried on it.
+Windows x86_64 is supported for building and running: audio capture and playback go through
+WASAPI via `cpal`, the media engine of the voice-chat sink exists for `x86_64-pc-windows-msvc`,
+and the release is a portable ZIP with `ai-translator.exe` and `ntgcalls.dll`. A virtual audio
+device there is a third-party driver (VB-Cable, VoiceMeeter), so `virtual_sink` is refused by
+the configuration check instead of pretending to work. Windows arm64 has no media engine and is
+not shipped.
 
 ## Architecture
 
@@ -102,10 +106,11 @@ sink is never started, and a sink that cannot deliver reports an error, which th
 records and acts on. A sink that fails is restarted with a bounded number of attempts and
 does not affect the other sinks.
 
-On macOS a virtual audio device is not part of the system audio stack but a third-party
-driver the user installs (BlackHole, Loopback); the application never installs a driver
-itself. The voice sink therefore stays unavailable there until stage 4, which is the honest
-answer rather than a silent no-op — see `docs/decisions.md`, ADR-002.
+On macOS and Windows a virtual audio device is not part of the system audio stack but a
+third-party driver the user installs (BlackHole or Loopback on macOS, VB-Cable or VoiceMeeter on
+Windows); the application never installs a driver itself. The `virtual_sink` is still a stub on
+every platform, so the configuration check refuses an enabled one with an explanation instead of
+letting the supervisor restart it — see `docs/decisions.md`, ADR-002.
 
 Translated speech comes from the AI provider itself as part of the same session that produces
 the translated text. Speech synthesis (TTS) is an optional additional source of audio, used
@@ -134,7 +139,7 @@ spoken.
 
 The transport is a native media engine (`libntgcalls`, the one behind pytgcalls), so this sink
 is a build feature, `telegram-call`, enabled only for the targets with a prebuilt engine:
-Linux x86_64, Linux arm64 and macOS arm64. Every other target — including macOS x86_64 —
+Linux x86_64, Linux arm64, macOS arm64 and Windows x86_64. Every other target — including macOS x86_64 —
 is built without the feature and stays pure Rust; the sink still parses there, and an enabled
 one is refused by the configuration check with the reason, instead of disappearing silently.
 
@@ -222,6 +227,8 @@ Ready-made examples live in `examples/`: `config.dev.toml` for development,
 - Nix with flakes (the development shell is provided **for Linux**)
 - On macOS: Xcode Command Line Tools and a rustup toolchain — the Nix shell is not used
   there, see *Building on macOS* below
+- On Windows: the MSVC toolchain (Visual Studio Build Tools with the C++ component) and,
+  for packaging, PowerShell 7 — see *Building on Windows* below
 - A reachable AI provider account for translation
 - External infrastructure for sinks that need it (an audio server, a browser)
 
@@ -275,6 +282,28 @@ both repositories on a macOS runner, so this path is checked on every push.
 
 Building for macOS *from* Linux is also possible, with osxcross in a container — see
 `docs/macos-cross-build.md`.
+
+### Building on Windows
+
+Windows has its own toolchain: the MSVC one, which is what the media engine of the voice-chat
+sink is built for. A plain Rust installation with the *Visual Studio Build Tools* C++ component
+is enough, no Nix and no cross-compilation:
+
+```powershell
+cd ..\transono; cargo build          # the library ai-translator depends on
+cd ..\ai-translator; cargo build
+```
+
+The release package is built by one script, which fetches the engine with a pinned checksum,
+runs the tests, builds the `telegram-call` variant and writes a portable ZIP with the executable
+and `ntgcalls.dll` next to it:
+
+```powershell
+pwsh -File packaging/build-windows.ps1
+```
+
+`-NoEngine` builds the pure-Rust variant, `-SkipTests` skips the test run. PowerShell 7 is
+needed for the packaging scripts; building the program itself only needs cargo.
 
 ### Microphone permission on macOS
 

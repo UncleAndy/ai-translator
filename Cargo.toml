@@ -27,7 +27,10 @@ telegram-call = [
 ]
 
 [dependencies]
-transono = { path = "../transono" }
+# The library is developed next to the application, so it is taken from the
+# tree; the version is the one this build expects, including the Windows-ready
+# 0.5.1 with a working device backend stub.
+transono = { path = "../transono", version = "0.5.1" }
 # Список устройств для команды `devices`: имена берутся из того же бэкенда,
 # из которого выбирает источник звука (версия та же, что у transono).
 cpal = "0.18"

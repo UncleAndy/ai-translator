@@ -499,6 +499,16 @@ impl Config {
 
             match sink {
                 VoiceSinkConfig::VirtualSink { device, .. } => {
+                    // The sink is a declared stub: it is built from the
+                    // configuration but has no playback yet, so an enabled one
+                    // is refused here instead of failing the first event and
+                    // being restarted by the supervisor.
+                    problems.push(ConfigProblem::Invalid {
+                        field: "sink.voice.virtual_sink".into(),
+                        reason: "виртуальное аудиоустройство ещё не реализовано: \
+                                 выберите output_device в [core] или приёмник telegram_call"
+                            .into(),
+                    });
                     if device.trim().is_empty() {
                         problems.push(ConfigProblem::Invalid {
                             field: "sink.voice.virtual_sink.device".into(),
@@ -1071,7 +1081,18 @@ mod tests {
         assert_eq!(cfg.sink.voice.len(), 1);
         assert_eq!(cfg.enabled_sinks(), 1);
         assert_eq!(cfg.sink.voice[0].kind(), "virtual_sink");
-        assert!(cfg.validate().is_empty());
+
+        // The sink parses, but playback is not written yet: the one problem it
+        // produces is the honest refusal, not a hidden acceptance.
+        let problems = cfg.validate();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            matches!(
+                &problems[0],
+                ConfigProblem::Invalid { field, .. } if field == "sink.voice.virtual_sink"
+            ),
+            "{problems:?}"
+        );
     }
 
     #[test]
@@ -1272,6 +1293,31 @@ mod tests {
             "сессия лежит в каталоге состояния: {session_file}"
         );
         assert!(*create_if_missing, "звонок создаётся, если его нет");
+    }
+
+    #[test]
+    fn a_virtual_device_sink_is_refused_while_it_is_not_implemented() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [core]
+            target_lang = "ru"
+
+            [[sink.voice]]
+            type = "virtual_sink"
+            device = "ai-translator"
+            "#,
+        )
+        .expect("конфигурация разбирается");
+
+        let problems = cfg.validate();
+        assert!(
+            problems.iter().any(|problem| matches!(
+                problem,
+                ConfigProblem::Invalid { field, reason }
+                    if field == "sink.voice.virtual_sink" && reason.contains("не реализовано")
+            )),
+            "заглушка обязана объяснить отказ: {problems:?}"
+        );
     }
 
     #[cfg(not(feature = "telegram-call"))]

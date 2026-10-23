@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Windows x86_64 joins the platforms, and the stubs stop pretending.
+
+### Added
+
+- Windows x86_64 builds and runs: capture and playback go through WASAPI, and the
+  release is a portable ZIP with `ai-translator.exe` and `ntgcalls.dll`. The
+  voice-chat sink works there too — the engine ships as a shared library for MSVC,
+  fetched by `packaging/fetch-ntgcalls.ps1` with the archive's SHA256 pinned the same
+  way the Linux and macOS engines are.
+- `packaging/build-windows.ps1` builds that ZIP: tests, the `telegram-call` variant,
+  the licences and `INSTALL-windows.txt`, plus a `.sha256` file beside it.
+- CI runs the whole suite on `windows-latest` and builds the package there, which is
+  also the only place where linking against the Windows engine is exercised.
+
+### Changed
+
+- `transono` is 0.5.1: its Unix-only `daemonize` dependency is Linux-only now, and the
+  Windows virtual-device backend answers honestly instead of being an empty stub that
+  the backend factory could not even construct.
+- Stopping with SIGTERM is Unix-only; on Windows the console handler behind Ctrl+C is
+  the whole story.
+
+### Fixed
+
+- An enabled `virtual_sink` is refused by the configuration check with an explanation.
+  It was accepted and then failed on the first translated phrase, which the supervisor
+  retried six times — six restarts for a sink that was never written.
+
 ## [0.2.3] - 2026-10-20
 
 The failures that used to be invisible: a dropped call, a sink that gave up after a

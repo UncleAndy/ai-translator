@@ -1,0 +1,68 @@
+ai-translator for Windows: how to start it
+==========================================
+
+This is a portable folder, there is no installer: unpack the ZIP anywhere and
+run the executable from that folder.
+
+1. Unpack the ZIP into a directory of your choice, for example
+
+       C:\Users\<you>\ai-translator
+
+   Use "Extract All" in Explorer: running the program from inside the ZIP viewer
+   does not work, because the engine DLL cannot be loaded from there.
+
+2. The folder holds:
+
+       ai-translator.exe    the program
+       ntgcalls.dll         media engine of the Telegram voice-chat sink
+       INSTALL-windows.txt  this file
+       LICENSE*             licences
+
+   Keep ntgcalls.dll next to the executable: it is loaded when the program
+   starts, not when a call begins, so a missing DLL stops it at once.
+
+3. Check that it starts, then run it:
+
+       .\ai-translator.exe --version
+       .\ai-translator.exe check -c examples\config.dev.toml
+       .\ai-translator.exe run   -c C:\Users\<you>\ai-translator.config.toml
+
+4. Configuration lives in a TOML file you write yourself; the shortest working
+   one is a single line:
+
+       [core]
+       target_lang = "ru"
+
+   The provider key is read from the OPENAI_API_KEY environment variable:
+
+       setx OPENAI_API_KEY "sk-..."
+
+   A new terminal is needed after setx for the variable to appear.
+
+What works on Windows
+---------------------
+
+Capture and playback go through WASAPI: the microphone, the system default
+output device, and any device named in the configuration. Text and voice sinks
+work as on other platforms, including the Telegram voice-chat sink, which uses
+the bundled engine.
+
+A virtual audio device (OBS, Zoom, Discord) is a third-party driver on Windows,
+as it is on macOS: install VB-Cable or VoiceMeeter and point `output_device` at
+it. The built-in `virtual_sink` is not implemented there yet and the
+configuration check refuses it with an explanation.
+
+The Windows console supports colours, so the translation is readable as it is on
+Linux; logs go to stderr, the translation to stdout.
+
+SmartScreen
+-----------
+
+The archive is not signed with a commercial certificate, so the first start of a
+downloaded copy shows "Windows protected your PC". Choose "More info" then "Run
+anyway", or unblock the file before starting:
+
+       Unblock-File .\ai-translator.exe
+
+The Microsoft Visual C++ runtime (2015-2022) is required; it is present on most
+machines, and can be installed from Microsoft's site if it is not.
