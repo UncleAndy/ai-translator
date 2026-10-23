@@ -191,7 +191,7 @@ D-3, C-2, E-1, E-2, F (`webhook` → `virtual_sink` → §5.1).
 
 После этих трёх правок в копии `cargo check --all-targets --target x86_64-pc-windows-gnu` и `cargo check --features telegram-call` под Windows **проходят** — то есть код приложения и приёмник звонка компилируются.
 
-**Что осталось непроверенным.** Линковка. В архиве движка для Windows лежит `ntgcalls.lib` (формат MSVC), и mingw-линкер его не принимает (`could not find native static library ntgcalls`) — это ожидаемо и не дефект проекта: релиз под Windows собирается MSVC-тулчейном. Воспроизвести MSVC-линковку из Linux (`cargo-xwin`) не удалось: падает сборка `ring` (нужен настоящий MSVC/clang-cl-контекст). Значит, единственный не подтверждённый шаг — линковка, и закрывается он одним прогоном на `windows-latest`.
+**Что осталось непроверенным.** Линковка. В архиве движка для Windows лежит `ntgcalls.lib` (формат MSVC), и mingw-линкер его не принимает (`could not find native static library ntgcalls`) — это ожидаемо и не дефект проекта: релиз под Windows собирается MSVC-тулчейном. Воспроизвести MSVC-линковку из Linux (`cargo-xwin`) не удалось: падает сборка `ring` (нужен настоящий MSVC/clang-cl-контекст). Шаг закрыт прогоном на `windows-latest` 23.10.2026: задание зелёное, пакет собран; артефакт выгружается только при ручном запуске.
 
 **Что нужно добавить для релиза.**
 - Упаковка: отдельный шаг `packaging/build-windows.ps1` (или `.sh` с `pwsh`) на Windows-раннере: `cargo build --release --features telegram-call` → портативный zip; опционально MSI (WiX/cargo-wix). Существующие bash-Docker-скрипты для Linux/macOS неприменимы.
