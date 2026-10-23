@@ -273,12 +273,19 @@ mod tests {
 
     #[test]
     fn builds_every_configured_text_sink() {
+        // The transcript sink opens the file while it is built, so the path has
+        // to exist on every platform: the system temporary directory does.
+        let transcript_file = std::env::temp_dir().join("ai-translator-test.txt");
+
         let cases = [
             ("console", console()),
             ("screen", websocket("127.0.0.1:0")),
             (
                 "file",
-                transcript("/tmp/ai-translator-test.txt", TranscriptFormat::Txt),
+                transcript(
+                    &transcript_file.display().to_string(),
+                    TranscriptFormat::Txt,
+                ),
             ),
             ("hook", webhook()),
             ("tg", telegram()),
