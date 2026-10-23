@@ -78,15 +78,17 @@ jobs:
           $env:NTGCALLS_DYLIB = '1'
           $env:NTGCALLS_LIB_DIR = $engine.LibDir
           cargo build --features telegram-call
-      # A package nobody can produce is not a release: build the ZIP here.
-      - name: portable package
+      # A package nobody can produce is not a release: build the ZIP and the MSI.
+      - name: portable package and installer
         working-directory: ai-translator
         shell: pwsh
         run: |
           ./packaging/build-windows.ps1 -SkipTests
-          $zip = Get-ChildItem dist/ai-translator-*-x86_64-windows.zip
-          if (-not $zip) { throw 'the package was not produced' }
-          $zip | Format-Table Name, Length
+          $files = Get-ChildItem dist/ai-translator-*-x86_64-windows.*
+          foreach ($name in @('*.zip', '*.msi')) {
+            if (-not (Get-ChildItem "dist/$name")) { throw "no $name was produced" }
+          }
+          $files | Format-Table Name, Length
       # Only a manual run keeps the file: with no Windows machine at hand, this
       # is how the package gets out. It expires by itself and never reaches the
       # repository or a release.
@@ -98,6 +100,8 @@ jobs:
           path: |
             ai-translator/dist/ai-translator-*-x86_64-windows.zip
             ai-translator/dist/ai-translator-*-x86_64-windows.zip.sha256
+            ai-translator/dist/ai-translator-*-x86_64-windows.msi
+            ai-translator/dist/ai-translator-*-x86_64-windows.msi.sha256
           if-no-files-found: error
           retention-days: 90
 

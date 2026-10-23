@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows installer of ai-translator.
+
+  The files come from a staged directory: `packaging/build-windows.ps1` builds
+  the release and puts the executable, the engine DLL, the licences and
+  INSTALL-windows.txt there, and `packaging/build-msi.ps1` turns that directory
+  into an MSI.
+
+      wix build -arch x64 -d Version=0.2.4 -d Stage=C:\work\stage ^
+          -o dist\ai-translator-0.2.4-x86_64-windows.msi packaging\ai-translator.wxs
+
+  The installer only copies files, creates a Start Menu shortcut and registers
+  itself for removal: no custom actions, no service, no registry beyond the
+  uninstall entry. The Visual C++ runtime is not bundled — it is a prerequisite,
+  as it is for the portable archive.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="AI Translator"
+      Manufacturer="Andrey Velikoredchanin"
+      Version="$(var.Version)"
+      UpgradeCode="38006b1c-fc0a-4ba8-ba6a-5b9385676f71"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <!-- An upgrade replaces the previous version instead of living beside it. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of AI Translator is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ai-translator" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="AI Translator" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProgramFiles" Directory="INSTALLFOLDER">
+      <File Id="Executable" Source="$(var.Stage)\ai-translator.exe" KeyPath="yes" />
+      <File Id="MediaEngine" Source="$(var.Stage)\ntgcalls.dll" />
+      <File Id="InstallNotes" Source="$(var.Stage)\INSTALL-windows.txt" />
+      <File Id="License" Source="$(var.Stage)\LICENSE" />
+      <File Id="LicenseMit" Source="$(var.Stage)\LICENSE-MIT" />
+      <File Id="LicenseApache" Source="$(var.Stage)\LICENSE-APACHE" />
+      <File Id="Readme" Source="$(var.Stage)\README.md" />
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcut" Directory="AppMenuFolder"
+               Guid="fe3715ab-2a19-40bb-b80b-e081df83233c">
+      <Shortcut Id="AppShortcut"
+                Name="AI Translator"
+                Description="Synchronous speech translator"
+                Target="[INSTALLFOLDER]ai-translator.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKLM" Key="Software\ai-translator"
+                     Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="AI Translator" Level="1">
+      <ComponentGroupRef Id="ProgramFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+</Wix>

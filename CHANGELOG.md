@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-10-23
+
+An installer for Windows, next to the portable archive.
+
+### Added
+
+- `ai-translator-<version>-x86_64-windows.msi` installs the program into
+  `Program Files\ai-translator`, adds a Start Menu shortcut, registers itself in
+  "Apps & features" and upgrades over a previous version instead of living beside
+  it. It is built by `packaging/build-msi.ps1` from the very directory the archive
+  is packed from, so both contain the same executable, engine DLL and licences.
+- The Windows CI job builds the MSI together with the archive and fails if either
+  is missing; a manual run keeps both as artifacts. WiX is pinned to version 5 —
+  versions 6 and later ask for the Open Source Maintenance Fee, and its toolchain
+  runs on Windows only.
+
 ## [0.2.4] - 2026-10-23
 
 Windows x86_64 joins the platforms, and the stubs stop pretending.
@@ -307,6 +323,7 @@ once.
 - Documentation: `docs/release.md`, `docs/macos-cross-build.md`,
   `docs/TZ_ai-translator_v0.1.md`.
 
+[0.2.5]: https://github.com/UncleAndy/ai-translator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/UncleAndy/ai-translator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/UncleAndy/ai-translator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/UncleAndy/ai-translator/compare/v0.2.1...v0.2.2

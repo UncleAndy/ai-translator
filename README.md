@@ -305,6 +305,18 @@ pwsh -File packaging/build-windows.ps1
 `-NoEngine` builds the pure-Rust variant, `-SkipTests` skips the test run. PowerShell 7 is
 needed for the packaging scripts; building the program itself only needs cargo.
 
+The same script also produces an MSI installer through WiX — version 5, the last one without
+the Open Source Maintenance Fee — which installs into `Program Files`, adds a Start Menu
+shortcut and upgrades in place:
+
+```powershell
+pwsh -File packaging/build-windows.ps1 -SkipTests     # ZIP and MSI
+pwsh -File packaging/build-msi.ps1                    # MSI only, from an existing stage
+```
+
+`-NoMsi` limits the script to the portable archive. WiX builds MSI on Windows only, so the
+installer is produced by the Windows CI job as well, next to the archive.
+
 ### Microphone permission on macOS
 
 macOS asks for microphone access the first time `ai-translator run` opens an input device.

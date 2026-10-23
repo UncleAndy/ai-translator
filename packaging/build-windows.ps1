@@ -30,7 +30,8 @@
 param(
     [string]$Version = '',
     [switch]$NoEngine,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$NoMsi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -124,3 +125,12 @@ Set-Content -Path "$zip.sha256" -Value $line -Encoding ascii
 
 Write-Host "== ready: $zip"
 Write-Host "   $line"
+
+# The installer wraps the same staged files, so it is built from the directory
+# that is already complete.
+if (-not $NoMsi) {
+    & (Join-Path $PSScriptRoot 'build-msi.ps1') -Stage $stage -Version $Version
+    if ($LASTEXITCODE -ne 0) {
+        throw "the installer was not built: exit code $LASTEXITCODE"
+    }
+}

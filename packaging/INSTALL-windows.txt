@@ -1,8 +1,16 @@
 ai-translator for Windows: how to start it
 ==========================================
 
-This is a portable folder, there is no installer: unpack the ZIP anywhere and
-run the executable from that folder.
+There are two ways to get the program.
+
+With the installer (ai-translator-<version>-x86_64-windows.msi): double-click it,
+confirm the elevation prompt, and the program appears in "AI Translator" in the
+Start Menu, in Program Files\ai-translator. A newer version installs over the old
+one; "Apps & features" removes it. The prompt says the publisher is unknown,
+because the file is not signed with a commercial certificate.
+
+Without an installer: unpack the ZIP anywhere and run the executable from that
+folder — the steps below.
 
 1. Unpack the ZIP into a directory of your choice, for example
 

@@ -38,6 +38,7 @@ git tag -a v0.2.2 -m "ai-translator 0.2.1" && git push origin v0.2.2
 | `ai-translator-<версия>-aarch64-macos.tar.gz` и `-aarch64-macos.dmg` | macOS на Apple Silicon | ничего; внутри `libntgcalls.dylib`, трансляция в голосовой чат есть |
 | `ai-translator-<версия>-x86_64-macos.tar.gz` и `-x86_64-macos.dmg` | macOS на Intel | ничего; движка для этой архитектуры нет, трансляции в голосовой чат нет |
 | `ai-translator-<версия>-x86_64-windows.zip` | Windows 10/11 x86_64 | Visual C++ 2015-2022; внутри `ai-translator.exe` и `ntgcalls.dll` |
+| `ai-translator-<версия>-x86_64-windows.msi` | Windows 10/11 x86_64 | то же; ставит в `Program Files`, делает ярлык, обновляется поверх прежней версии |
 | `SHA256SUMS` | — | контрольные суммы всех файлов |
 
 ## Windows собирается на Windows
@@ -51,6 +52,14 @@ pwsh -File packaging/build-windows.ps1
 Скрипт берёт версию из `Cargo.toml`, гоняет тесты (если не указан `-SkipTests`), скачивает движок через `packaging/fetch-ntgcalls.ps1` (там закреплён SHA256 архива `ntgcalls.windows-x86_64-shared_libs.zip`), собирает `--release --features telegram-call` и кладёт в `dist/` портативный ZIP с `ai-translator.exe`, `ntgcalls.dll`, лицензиями и `INSTALL-windows.txt`, рядом — файл `.sha256`. Вариант без движка: `-NoEngine`.
 
 Требуется MSVC-тулчейн (Visual Studio Build Tools с компонентом C++) и PowerShell 7. CI-задание `windows-latest` делает то же самое на каждом push — и это единственное место, где линковка с движком проверяется автоматически.
+
+Установщик собирается из того же подготовленного каталога отдельным шагом:
+
+```powershell
+pwsh -File packaging/build-msi.ps1 -Stage build\windows\work\ai-translator-0.2.4
+```
+
+WiX работает только на Windows (он сам об этом предупреждает при запуске на другой ОС), поэтому MSI на Linux-хосте не собрать. Версия WiX закреплена на `5.*`: начиная с 6 требуется оплата Open Source Maintenance Fee. `build-windows.ps1` вызывает этот шаг сам; `-NoMsi` его пропускает. Установщик ставит файлы в `Program Files\ai-translator`, добавляет ярлык в меню «Пуск», регистрируется в «Программах и компонентах» и обновляется поверх предыдущей версии (`MajorUpgrade`).
 
 **Если Windows-машины нет.** Обычный прогон пакет никуда не выгружает. Но ручной запуск (`workflow_dispatch`) оставляет его артефактом прогона на 90 дней — это способ забрать файл с Linux-хоста:
 
