@@ -39,6 +39,7 @@ volume is read-only, so the quarantine mark cannot be removed there.
 
 The binary does not start without libntgcalls.dylib: the engine is an ordinary
 shared dependency, found through @loader_path, so the two files stay together.
-The Intel build has no engine and no voice-chat sink.
+This package is for Apple Silicon only: there is no build for Intel Macs, because the media
+engine that carries the voice-chat sink has none.
 
 The microphone permission is asked on the first `run`. Apple Silicon only.

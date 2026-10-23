@@ -29,7 +29,8 @@ and a rustup toolchain, without Nix; audio capture and playback go through CoreA
 `cpal`, and the PipeWire module of `transono` is not compiled at all. The voice sink is
 unavailable there — a virtual audio device is a third-party driver the user installs — and the
 microphone permission is asked from the terminal. Linux, macOS and Windows are built and tested
-by CI on every push.
+by CI on every push. Release packages are made for Apple Silicon only: the media engine has no
+build for Intel Macs, and a package without the voice-chat sink is not published.
 
 Windows x86_64 is supported for building and running: audio capture and playback go through
 WASAPI via `cpal`, the media engine of the voice-chat sink exists for `x86_64-pc-windows-msvc`,
@@ -137,11 +138,12 @@ access credential and is treated as a secret. Speech is fed to the call frame by
 the same pipeline that feeds the text sinks, so the group hears the translation as it is
 spoken.
 
-The transport is a native media engine (`libntgcalls`, the one behind pytgcalls), so this sink
-is a build feature, `telegram-call`, enabled only for the targets with a prebuilt engine:
-Linux x86_64, Linux arm64, macOS arm64 and Windows x86_64. Every other target — including macOS x86_64 —
-is built without the feature and stays pure Rust; the sink still parses there, and an enabled
-one is refused by the configuration check with the reason, instead of disappearing silently.
+The transport is a native media engine (`libntgcalls`, the one behind pytgcalls), so the sink is
+a build feature, `telegram-call`. Every package is built with it: Linux x86_64, macOS on Apple
+Silicon and Windows x86_64 carry the engine beside the binary, and there is no switch to build one
+without it. A plain `cargo build` leaves the feature off, so the program compiles without
+downloading the engine; such a build still parses the sink and refuses an enabled one with the
+reason, instead of dropping it silently.
 
 ## Configuration
 
@@ -302,8 +304,8 @@ and `ntgcalls.dll` next to it:
 pwsh -File packaging/build-windows.ps1
 ```
 
-`-NoEngine` builds the pure-Rust variant, `-SkipTests` skips the test run. PowerShell 7 is
-needed for the packaging scripts; building the program itself only needs cargo.
+`-SkipTests` skips the test run. PowerShell 7 is needed for the packaging scripts; building the
+program itself only needs cargo.
 
 The same script also produces an MSI installer through WiX — version 5, the last one without
 the Open Source Maintenance Fee — which installs into `Program Files`, adds a Start Menu

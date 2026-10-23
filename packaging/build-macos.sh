@@ -2,7 +2,8 @@
 # Builds the macOS release artefacts for one architecture: a tarball, plus a
 # disk image where hdiutil exists. Both are unsigned in the Gatekeeper sense.
 #
-# AIT_TARGET picks the architecture (aarch64-apple-darwin or x86_64-apple-darwin)
+# AIT_TARGET picks the architecture; Apple Silicon is the only one shipped, since
+# the media engine that carries the voice-chat sink exists for it alone.
 # and names the artefacts. On macOS it runs with the command line tools; on Linux
 # packaging/build-all.sh runs it inside the osxcross image, where STRIP has to be
 # llvm-strip and there is no hdiutil, so the disk image is simply skipped.
@@ -20,7 +21,11 @@ NAME=ai-translator
 AIT_TARGET="${AIT_TARGET:-$(uname -m | sed 's/arm64/aarch64/')-apple-darwin}"
 case "$AIT_TARGET" in
   aarch64-apple-darwin) ARCH=aarch64 ;;
-  x86_64-apple-darwin)  ARCH=x86_64 ;;
+  x86_64-apple-darwin)
+    echo "no package for Intel Macs: the media engine has no build for them," >&2
+    echo "and a release without the voice-chat sink is not published" >&2
+    exit 2
+    ;;
   *) echo "unsupported target: $AIT_TARGET" >&2; exit 1 ;;
 esac
 VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
@@ -32,42 +37,24 @@ echo "== ai-translator $VERSION, $AIT_TARGET =="
 test -n "$VERSION"
 
 # The voice-chat sink streams through the media engine, and the engine exists for
-# Apple Silicon only. An Intel build drops the feature and the program refuses a
-# configuration with `telegram_call`, saying exactly that.
-FEATURES="${FEATURES:-}"
-CALL_LIB=""
-call_flags=""
-if [[ ",$FEATURES," == *",telegram-call,"* ]]; then
-  if [ "$AIT_TARGET" = "aarch64-apple-darwin" ]; then
-    ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh aarch64-apple-darwin)"
-    CALL_LIB="$ENGINE_DIR/lib/libntgcalls.dylib"
-    test -f "$CALL_LIB"
+# Apple Silicon only — which is why Intel Macs get no package. The feature is
+# fixed here rather than taken from the environment: a build without the sink is
+# not published.
+FEATURES=telegram-call
+ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh aarch64-apple-darwin)"
+CALL_LIB="$ENGINE_DIR/lib/libntgcalls.dylib"
+test -f "$CALL_LIB"
 
-    # The engine is a shared library beside the binary: a static copy would drag
-    # its own C++ runtime into the process, which is exactly what broke the Linux
-    # build. The rpath is the directory of the binary itself.
-    export NTGCALLS_DYLIB=1
-    export NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")"
-    # The library names its own dependencies (libz, libc++, the frameworks), so
-    # only the place it lies next to the binary has to be said.
-    call_flags="-C link-arg=-Wl,-rpath,@loader_path"
-  else
-    echo "-- voice-chat sink: no engine for $AIT_TARGET, building without it" >&2
-    kept=""
-    IFS=',' read -r -a wanted <<< "$FEATURES"
-    for feature in "${wanted[@]}"; do
-      [ -z "$feature" ] && continue
-      [ "$feature" = "telegram-call" ] && continue
-      kept="${kept:+$kept,}$feature"
-    done
-    FEATURES="$kept"
-  fi
-fi
+# The engine is a shared library beside the binary: a static copy would drag its
+# own C++ runtime into the process, which is exactly what broke the Linux build.
+# The rpath is the directory of the binary itself.
+export NTGCALLS_DYLIB=1
+export NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")"
+# The library names its own dependencies (libz, libc++, the frameworks), so only
+# the place it lies next to the binary has to be said.
+call_flags="-C link-arg=-Wl,-rpath,@loader_path"
 
-BUILD=(cargo build --release --locked --target "$AIT_TARGET")
-if [ -n "$FEATURES" ]; then
-  BUILD+=(--features "$FEATURES")
-fi
+BUILD=(cargo build --release --locked --target "$AIT_TARGET" --features "$FEATURES")
 
 # Every flag below belongs to the target, so that build scripts for the host are
 # left alone.

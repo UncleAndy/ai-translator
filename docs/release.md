@@ -11,13 +11,9 @@ nix shell nixpkgs#gh -c gh release create v0.2.2 --verify-tag --generate-notes d
 
 Первая собирает всё в `dist/` и кладёт туда же `SHA256SUMS`. Вторая создаёт релиз с уже существующего тега и прикладывает к нему файлы из `dist/` — имя тега обязано совпадать с версией в `Cargo.toml`.
 
-Вариант с живой трансляцией в голосовой чат Telegram собирается той же командой с указанием фичи — движок кладётся рядом с бинарником (`libntgcalls.so` в Linux, `libntgcalls.dylib` на Apple Silicon), поэтому пакеты отличаются размером и самой функцией:
+Живая трансляция в голосовой чат Telegram входит в **каждый** пакет: фича `telegram-call` зашита в сборочные скрипты (`build-linux.sh`, `build-macos.sh`, `build-windows.ps1`), переключателя нет. Движок кладётся рядом с бинарником — `libntgcalls.so` в Linux, `libntgcalls.dylib` на Apple Silicon, `ntgcalls.dll` на Windows — и находится по rpath или как обычная DLL.
 
-```sh
-FEATURES=telegram-call bash packaging/build-all.sh
-```
-
-Фича идёт в сборки Linux x86_64, Linux arm64 и macOS arm64. Для macOS **Intel** движка не существует: `build-macos.sh` сам выкидывает `telegram-call` из `FEATURES` для `x86_64-apple-darwin`, собирает бинарник без фичи, и такой бинарник отказывается работать с конфигурацией, где есть `telegram_call`, с сообщением о неподдерживаемой платформе.
+Пакеты собираются для трёх платформ: Linux x86_64, macOS **Apple Silicon** и Windows x86_64. Для Intel-маков пакета нет: движка под `x86_64-apple-darwin` не существует, а пакет без трансляции не публикуется, поэтому `build-macos.sh` отказывается собирать эту цель (код возврата 2).
 
 Для этого варианта в образе сборки нужен `zlib1g-dev` (он уже добавлен в `packaging/Dockerfile.linux`). Под NixOS сборка и запуск идут через `packaging/run-nix.sh`, отдельных переменных не нужно.
 
@@ -36,7 +32,6 @@ git tag -a v0.2.2 -m "ai-translator 0.2.1" && git push origin v0.2.2
 | `ai-translator-<версия>-1.x86_64.rpm` | Fedora 40+, RHEL 10+ | то же, объявлено в `Requires` (`pipewire-libs >= 1.0`) |
 | `ai-translator-<версия>-x86_64.AppImage` | любой Linux x86_64 | те же библиотеки **в системе**: внутрь образа они не упаковываются |
 | `ai-translator-<версия>-aarch64-macos.tar.gz` и `-aarch64-macos.dmg` | macOS на Apple Silicon | ничего; внутри `libntgcalls.dylib`, трансляция в голосовой чат есть |
-| `ai-translator-<версия>-x86_64-macos.tar.gz` и `-x86_64-macos.dmg` | macOS на Intel | ничего; движка для этой архитектуры нет, трансляции в голосовой чат нет |
 | `ai-translator-<версия>-x86_64-windows.zip` | Windows 10/11 x86_64 | Visual C++ 2015-2022; внутри `ai-translator.exe` и `ntgcalls.dll` |
 | `ai-translator-<версия>-x86_64-windows.msi` | Windows 10/11 x86_64 | то же; ставит в `Program Files`, делает ярлык, обновляется поверх прежней версии |
 | `SHA256SUMS` | — | контрольные суммы всех файлов |
@@ -49,7 +44,7 @@ git tag -a v0.2.2 -m "ai-translator 0.2.1" && git push origin v0.2.2
 pwsh -File packaging/build-windows.ps1
 ```
 
-Скрипт берёт версию из `Cargo.toml`, гоняет тесты (если не указан `-SkipTests`), скачивает движок через `packaging/fetch-ntgcalls.ps1` (там закреплён SHA256 архива `ntgcalls.windows-x86_64-shared_libs.zip`), собирает `--release --features telegram-call` и кладёт в `dist/` портативный ZIP с `ai-translator.exe`, `ntgcalls.dll`, лицензиями и `INSTALL-windows.txt`, рядом — файл `.sha256`. Вариант без движка: `-NoEngine`.
+Скрипт берёт версию из `Cargo.toml`, гоняет тесты (если не указан `-SkipTests`), скачивает движок через `packaging/fetch-ntgcalls.ps1` (там закреплён SHA256 архива `ntgcalls.windows-x86_64-shared_libs.zip`), собирает `--release --features telegram-call` и кладёт в `dist/` портативный ZIP с `ai-translator.exe`, `ntgcalls.dll`, лицензиями и `INSTALL-windows.txt`, рядом — файл `.sha256`. Варианта без движка нет: фича зашита в скрипт.
 
 Требуется MSVC-тулчейн (Visual Studio Build Tools с компонентом C++) и PowerShell 7. CI-задание `windows-latest` делает то же самое на каждом push — и это единственное место, где линковка с движком проверяется автоматически.
 

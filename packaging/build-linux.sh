@@ -8,10 +8,9 @@
 # needs PipeWire 1.0. The binary wants libpipewire-0.3-0 >= 1.0 at run time
 # (Ubuntu 24.04+, Debian 13+, Fedora 40+) and no glibc newer than 2.34.
 #
-# Environment: DIST (default dist), WORK (default build), CARGO_TARGET_DIR,
-# FEATURES (default empty; `telegram-call` adds the live voice-chat sink; that
-# build links the media engine statically, so nothing extra ships beside the
-# binary and no new runtime dependency appears).
+# Environment: DIST (default dist), WORK (default build), CARGO_TARGET_DIR.
+# Every package carries the live voice-chat sink: the feature is fixed here, not
+# taken from the environment, and the media engine travels beside the binary.
 # Needs: cargo, strip, tar, gzip, curl, nfpm on PATH.
 set -euo pipefail
 
@@ -23,7 +22,8 @@ RPM_ARCH=x86_64
 TRIPLE=x86_64-linux
 DIST="${DIST:-dist}"
 WORK="${WORK:-build}"
-FEATURES="${FEATURES:-}"
+# A package without the voice-chat sink is not shipped at all.
+FEATURES=telegram-call
 # The version comes from Cargo.toml, not from the environment: build images
 # define VERSION for their own purposes.
 VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
@@ -32,31 +32,23 @@ BIN_DIR="${CARGO_TARGET_DIR:-target}/release"
 echo "== ai-translator $VERSION =="
 test -n "$VERSION"
 
-BUILD_ARGS=(--release --locked)
-if [ -n "$FEATURES" ]; then
-  BUILD_ARGS+=(--features "$FEATURES")
-fi
+BUILD_ARGS=(--release --locked --features "$FEATURES")
 
 # The voice-chat sink streams through a native media engine. It is linked as a
 # shared library and shipped beside the binary: a static copy brings its own C++
 # runtime and allocator into the process, and the rest of the program stops
 # working — even when the sink is disabled.
-CALL_LIB=""
-if [[ ",$FEATURES," == *",telegram-call,"* ]]; then
-  echo "-- voice-chat sink: fetching the media engine"
-  ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh x86_64-unknown-linux-gnu)"
-  CALL_LIB="$ENGINE_DIR/lib/libntgcalls.so"
-  test -f "$CALL_LIB"
+echo "-- voice-chat sink: fetching the media engine"
+ENGINE_DIR="$(bash packaging/fetch-ntgcalls.sh x86_64-unknown-linux-gnu)"
+CALL_LIB="$ENGINE_DIR/lib/libntgcalls.so"
+test -f "$CALL_LIB"
 
-  # The rpath looks first next to the binary (tarball, AppImage) and then in the
-  # library directory of a distribution package.
-  NTGCALLS_DYLIB=1 \
-    NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")" \
-    RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-lz -C link-arg=-Wl,-rpath,\$ORIGIN:\$ORIGIN/../lib/ai-translator" \
-    cargo build "${BUILD_ARGS[@]}"
-else
+# The rpath looks first next to the binary (tarball, AppImage) and then in the
+# library directory of a distribution package.
+NTGCALLS_DYLIB=1 \
+  NTGCALLS_LIB_DIR="$(dirname "$CALL_LIB")" \
+  RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-lz -C link-arg=-Wl,-rpath,\$ORIGIN:\$ORIGIN/../lib/ai-translator" \
   cargo build "${BUILD_ARGS[@]}"
-fi
 
 rm -rf "$DIST" "$WORK"
 

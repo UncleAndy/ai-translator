@@ -10,14 +10,11 @@
     without a compiler. Everything is staged under build\windows and the result
     lands in dist\ next to the other platforms.
 
-    The voice-chat sink is included by default — the engine exists for Windows
-    x86_64 — and `-NoEngine` builds the pure-Rust variant for comparison.
+    The voice-chat sink is part of every package: the feature is fixed here, not
+    a switch, and the media engine DLL travels beside the executable.
 
 .PARAMETER Version
     Release version; taken from Cargo.toml when omitted.
-
-.PARAMETER NoEngine
-    Build without the `telegram-call` feature: no engine, no DLL in the package.
 
 .PARAMETER SkipTests
     Skip `cargo test` before packaging. The default runs it, because a package
@@ -29,7 +26,6 @@
 [CmdletBinding()]
 param(
     [string]$Version = '',
-    [switch]$NoEngine,
     [switch]$SkipTests,
     [switch]$NoMsi
 )
@@ -51,10 +47,8 @@ Write-Host "== ai-translator $Version for Windows x86_64 =="
 
 $target = 'x86_64-pc-windows-msvc'
 $env:CARGO_TARGET_DIR = Join-Path $root 'build\windows\target'
-$features = @()
-if (-not $NoEngine) {
-    $features = @('telegram-call')
-}
+# A package without the voice-chat sink is not shipped, so there is no switch.
+$features = @('telegram-call')
 
 $cargoCommon = @('--locked', '--target', $target)
 
@@ -70,11 +64,9 @@ if (-not $SkipTests) {
     }
 }
 
-if (-not $NoEngine) {
-    $engine = & (Join-Path $PSScriptRoot 'fetch-ntgcalls.ps1')
-    $env:NTGCALLS_DYLIB = '1'
-    $env:NTGCALLS_LIB_DIR = $engine.LibDir
-}
+$engine = & (Join-Path $PSScriptRoot 'fetch-ntgcalls.ps1')
+$env:NTGCALLS_DYLIB = '1'
+$env:NTGCALLS_LIB_DIR = $engine.LibDir
 
 Write-Host '-- release build'
 $buildArgs = @('build', '--release') + $cargoCommon
@@ -98,9 +90,7 @@ if (-not (Test-Path $exe)) {
 }
 Copy-Item $exe (Join-Path $stage 'ai-translator.exe')
 
-if (-not $NoEngine) {
-    Copy-Item $engine.DllPath (Join-Path $stage 'ntgcalls.dll')
-}
+Copy-Item $engine.DllPath (Join-Path $stage 'ntgcalls.dll')
 
 foreach ($file in @('LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'README.md')) {
     $source = Join-Path $root $file

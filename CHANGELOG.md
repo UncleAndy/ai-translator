@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.5] - 2026-10-23
 
-An installer for Windows, next to the portable archive.
+An installer for Windows, and one rule for every package: the Telegram voice-chat
+sink is always inside.
 
 ### Added
 
@@ -20,6 +21,22 @@ An installer for Windows, next to the portable archive.
   is missing; a manual run keeps both as artifacts. WiX is pinned to version 5 —
   versions 6 and later ask for the Open Source Maintenance Fee, and its toolchain
   runs on Windows only.
+
+### Changed
+
+- Every package carries the voice-chat sink: `telegram-call` is fixed in
+  `build-linux.sh`, `build-macos.sh` and `build-windows.ps1` instead of arriving
+  through `FEATURES`, so a release without the engine can no longer be built by
+  accident. `-NoEngine` is gone from the Windows script for the same reason; a
+  plain `cargo build` still leaves the feature off, so the program compiles
+  without downloading the engine.
+
+### Removed
+
+- The Intel macOS packages (`x86_64-macos.tar.gz` and `.dmg`). The media engine
+  has no build for `x86_64-apple-darwin`, and a package without the voice-chat
+  sink is not published: `build-macos.sh` refuses that target with exit code 2,
+  and `build-all.sh` no longer walks it.
 
 ## [0.2.4] - 2026-10-23
 

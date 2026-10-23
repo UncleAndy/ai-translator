@@ -57,12 +57,13 @@ docker run --rm \
   -e CARGO_TARGET_DIR=/work/ai-translator/build/linux/target \
   -e DIST=/work/ai-translator/build/linux/dist \
   -e WORK=/work/ai-translator/build/linux/work \
-  -e FEATURES="${FEATURES:-}" \
   "$LINUX_IMAGE" bash packaging/build-linux.sh
 
 # The tree is mounted with its sibling transono: ai-translator depends on it
-# by path.
-for target in aarch64-apple-darwin x86_64-apple-darwin; do
+# by path. Apple Silicon only: the media engine has no build for Intel Macs, and
+# a package without the voice-chat sink is not published.
+MACOS_TARGETS=(aarch64-apple-darwin)
+for target in "${MACOS_TARGETS[@]}"; do
   arch=${target%%-apple-darwin}
   echo "-- macOS $arch: binary and tarball (osxcross)"
   docker run --rm \
@@ -75,7 +76,6 @@ for target in aarch64-apple-darwin x86_64-apple-darwin; do
     -e WORK="/work/ai-translator/build/macos/$arch/work" \
     -e STRIP=llvm-strip \
     -e RUSTUP_TOOLCHAIN=1.95.0 \
-    -e FEATURES="${FEATURES:-}" \
     "$MACOS_IMAGE" bash packaging/build-macos.sh
 
   echo "-- macOS $arch: disk image (hfsprogs + libdmg-hfsplus)"
