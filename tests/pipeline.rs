@@ -43,6 +43,7 @@ fn core() -> CoreConfig {
         output_device: "default".to_string(),
         voice: None,
         transcription_model: None,
+        session_reconnect_minutes: 55,
     }
 }
 

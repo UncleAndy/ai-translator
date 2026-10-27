@@ -8,24 +8,35 @@
 //! Starting the source needs an audio device and an API key; the text and script
 //! sources exist so that everything downstream can be exercised without them.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use futures_util::stream::BoxStream;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use cpal::traits::DeviceTrait;
+use transono::audio::output::BoxSink;
 use transono::audio::{
-    AudioDevicesCpal, AudioInputCpal, AudioOutput, AudioOutputCpal, LatencyStats,
+    Audio, AudioDevicesCpal, AudioInputCpal, AudioOutput, AudioOutputCpal, EncodedAudioFormat,
+    LatencyStats, Pipelines,
 };
+use transono::core::error::{CoreError, Result as CoreResult};
+use transono::core::provider::{Provider, ProviderSession};
+use transono::core::session_event::SessionEvent;
 
+use crate::source::reconnect::{
+    LiveSession, OpenError, OpenFuture, ReconnectPolicy, ReconnectReport, supervise,
+};
 use crate::source::silent::SilentOutput;
 use transono::line::TranslationLine;
 use transono::providers::openai::translation::{
     OpenAITranslationConfig, OpenAITranslationProvider,
 };
 
-use crate::bus::{EventBus, LangPair, LineId};
+use crate::bus::{EventBus, LangPair, LineId, LineState, TranslationEvent};
 use crate::config::CoreConfig;
 use crate::core_glue::adapt::EventAdapter;
 use crate::core_glue::line::EventBridge;
@@ -53,11 +64,19 @@ pub enum SourceError {
     Line(String),
 }
 
+/// How long the supervisor may take to let go of the line when the program
+/// stops; a stuck session task must not hold Ctrl+C.
+const SOURCE_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Running audio source.
+///
+/// The provider session lives in a task of its own: the provider closes
+/// sessions after about an hour, and that task is what opens the next one, so
+/// a broadcast outlives the limit instead of stopping with it.
 pub struct AudioSource {
-    line: TranslationLine<OpenAITranslationProvider>,
-    bridge: Option<JoinHandle<()>>,
-    stopper: watch::Sender<bool>,
+    stop: watch::Sender<bool>,
+    task: Option<JoinHandle<()>>,
+    stats: Arc<LatencyStats>,
 }
 
 impl AudioSource {
@@ -65,90 +84,295 @@ impl AudioSource {
     ///
     /// Fails before any audio is captured if the provider is unknown, the
     /// devices are unavailable or the provider rejects the session — a broken
-    /// run should be visible immediately, not at the first phrase.
+    /// run should be visible immediately, not at the first phrase. Interruptions
+    /// after that are handled by the supervisor and do not end the program.
     pub async fn start(cfg: &CoreConfig, bus: EventBus) -> Result<Self, SourceError> {
         // The provider speaks TLS; rustls needs a process-level crypto provider.
         // A provider already installed by someone else is fine.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let provider = build_provider(cfg)?;
-
-        let devices = AudioDevicesCpal::new();
-        let capture = if cfg.input_device == "default" {
-            devices.default_input()
-        } else {
-            devices.find_input(&cfg.input_device)
+        // The name is checked before the devices are touched, as it always was.
+        if cfg.provider != "openai/translation" {
+            return Err(SourceError::UnknownProvider(cfg.provider.clone()));
         }
-        .map_err(|e| SourceError::Device(e.to_string()))?;
+
         let stats = Arc::new(LatencyStats::default());
-        let input = AudioInputCpal::new(capture, stats.clone())
-            .map_err(|e| SourceError::Device(e.to_string()))?;
-        let output = playback(&cfg.output_device, &devices, stats.clone())?;
+        let first = open_session(cfg, &bus, stats.clone()).await?;
 
-        let mut line = TranslationLine::new(provider, Box::new(input), output, stats)
-            .await
-            .map_err(|e| SourceError::Line(e.to_string()))?;
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        line.set_event_sender(tx);
-
-        let adapter = EventAdapter::new(LineId(0), langs(cfg));
-        let bridge = EventBridge::new(adapter, bus, rx);
-        let stopper = bridge.stopper();
-
-        line.run()
-            .await
-            .map_err(|e| SourceError::Line(e.to_string()))?;
-
-        let bridge = tokio::spawn(bridge.run());
+        let policy = ReconnectPolicy::from_minutes(cfg.session_reconnect_minutes);
+        let (stop, stop_rx) = watch::channel(false);
+        let task = tokio::spawn(supervise_sessions(
+            cfg.clone(),
+            bus,
+            stats.clone(),
+            first,
+            stop_rx,
+            policy,
+        ));
 
         Ok(Self {
-            line,
-            bridge: Some(bridge),
-            stopper,
+            stop,
+            task: Some(task),
+            stats,
         })
     }
 
-    /// The translation line, for latency statistics and state.
-    pub fn line(&self) -> &TranslationLine<OpenAITranslationProvider> {
-        &self.line
+    /// Latency counters of the audio pipelines, shared across reconnects.
+    pub fn stats(&self) -> &Arc<LatencyStats> {
+        &self.stats
     }
 
-    /// Stop the session and the bridge.
+    /// Stop the session and its supervisor.
     ///
-    /// The bridge is signalled rather than left to notice the closed channel:
-    /// the line keeps its event sender alive, so the channel never closes on
-    /// its own, and the last phrase would never be flushed.
+    /// The supervisor is signalled rather than simply left alone: it may be
+    /// waiting out a backoff, and the program must not wait for that.
     pub async fn stop(mut self) -> Result<(), SourceError> {
-        let result = self
-            .line
-            .stop()
-            .await
-            .map_err(|e| SourceError::Line(e.to_string()));
+        let _ = self.stop.send(true);
 
-        let _ = self.stopper.send(true);
-
-        if let Some(bridge) = self.bridge.take() {
-            match tokio::time::timeout(BRIDGE_STOP_TIMEOUT, bridge).await {
+        if let Some(task) = self.task.take() {
+            match tokio::time::timeout(SOURCE_STOP_TIMEOUT, task).await {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::error!("мост событий упал: {error}"),
-                Err(_) => tracing::warn!("мост событий не завершился за отведённое время"),
+                Ok(Err(error)) => tracing::error!("надзиратель источника упал: {error}"),
+                Err(_) => tracing::warn!("источник не остановился за отведённое время"),
             }
         }
 
-        result
+        Ok(())
+    }
+}
+
+/// Run the reconnect supervisor and publish what happens on the bus.
+async fn supervise_sessions(
+    cfg: CoreConfig,
+    bus: EventBus,
+    stats: Arc<LatencyStats>,
+    first: LiveLine,
+    stop: watch::Receiver<bool>,
+    policy: ReconnectPolicy,
+) {
+    let line = LineId(0);
+
+    let opener_cfg = cfg.clone();
+    let opener_bus = bus.clone();
+    let opener_stats = stats.clone();
+    let open = move || -> OpenFuture<LiveLine> {
+        let cfg = opener_cfg.clone();
+        let bus = opener_bus.clone();
+        let stats = opener_stats.clone();
+        Box::pin(async move { open_session(&cfg, &bus, stats).await.map_err(opening_error) })
+    };
+
+    let report_bus = bus.clone();
+    let report = move |report: ReconnectReport| {
+        let state = match &report {
+            ReconnectReport::SessionEnded { .. } | ReconnectReport::Reconnecting { .. } => {
+                LineState::Reconnecting
+            }
+            ReconnectReport::Restored { .. } => LineState::Running,
+            ReconnectReport::GaveUp { .. } => LineState::Failed,
+        };
+        if let ReconnectReport::GaveUp { attempts, error } = &report {
+            tracing::error!("перевод остановлен: {attempts} попыток, {error}");
+        }
+        report_bus.publish(TranslationEvent::Status {
+            line,
+            state,
+            at: Instant::now(),
+        });
+    };
+
+    supervise(open, first, stop, policy, report).await;
+}
+
+/// One running line with its bridge: everything a provider session owns.
+struct LiveLine {
+    line: Option<TranslationLine<WatchingProvider<OpenAITranslationProvider>>>,
+    bridge: Option<JoinHandle<()>>,
+    stopper: watch::Sender<bool>,
+    finished: watch::Receiver<u64>,
+}
+
+impl LiveSession for LiveLine {
+    fn finished(&self) -> watch::Receiver<u64> {
+        self.finished.clone()
+    }
+
+    fn close(mut self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            if let Some(mut line) = self.line.take() {
+                // An error here is the session that just died, not news: the
+                // supervisor is already replacing it.
+                if let Err(error) = line.stop().await {
+                    tracing::debug!("линия остановлена с ошибкой: {error}");
+                }
+            }
+
+            // The bridge flushes the phrase in progress, so the last words are
+            // not lost between two sessions.
+            let _ = self.stopper.send(true);
+            if let Some(bridge) = self.bridge.take() {
+                match tokio::time::timeout(BRIDGE_STOP_TIMEOUT, bridge).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::error!("мост событий упал: {error}"),
+                    Err(_) => tracing::warn!("мост событий не завершился за отведённое время"),
+                }
+            }
+        })
+    }
+}
+
+/// Open one provider session and wire it to the bus.
+async fn open_session(
+    cfg: &CoreConfig,
+    bus: &EventBus,
+    stats: Arc<LatencyStats>,
+) -> Result<LiveLine, SourceError> {
+    let provider = build_provider(cfg)?;
+
+    let devices = AudioDevicesCpal::new();
+    let capture = if cfg.input_device == "default" {
+        devices.default_input()
+    } else {
+        devices.find_input(&cfg.input_device)
+    }
+    .map_err(|e| SourceError::Device(e.to_string()))?;
+
+    let input = AudioInputCpal::new(capture, stats.clone())
+        .map_err(|e| SourceError::Device(e.to_string()))?;
+    let output = playback(&cfg.output_device, &devices, stats.clone())?;
+
+    let mut line = TranslationLine::new(provider, Box::new(input), output, stats.clone())
+        .await
+        .map_err(|e| SourceError::Line(e.to_string()))?;
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    line.set_event_sender(tx);
+
+    let adapter = EventAdapter::new(LineId(0), langs(cfg));
+    let bridge = EventBridge::new(adapter, bus.clone(), rx);
+    let stopper = bridge.stopper();
+
+    // Subscribe before the session starts: a session that fails immediately
+    // must still be noticed, and a receiver created afterwards would wait for
+    // the next change instead of this one.
+    let finished = line.provider().finished();
+
+    line.run()
+        .await
+        .map_err(|e| SourceError::Line(e.to_string()))?;
+
+    let bridge = tokio::spawn(bridge.run());
+
+    Ok(LiveLine {
+        line: Some(line),
+        bridge: Some(bridge),
+        stopper,
+        finished,
+    })
+}
+
+/// Turn a start-up failure into what the supervisor needs to know about it.
+fn opening_error(error: SourceError) -> OpenError {
+    match error {
+        // The provider refusing a session is worth a different pace than a
+        // device that is busy or a network that is down.
+        SourceError::Provider(message) | SourceError::Line(message) => OpenError::classify(message),
+        other => OpenError::Transient(other.to_string()),
+    }
+}
+
+/// A provider that tells the outside world when one of its sessions ends.
+///
+/// The line owns its provider, so this wrapper is where the supervisor's signal
+/// comes from without changing `transono`: it adds one counter and nothing else.
+struct WatchingProvider<P> {
+    inner: P,
+    ended: watch::Sender<u64>,
+}
+
+impl<P> WatchingProvider<P> {
+    fn new(inner: P) -> Self {
+        let (ended, _) = watch::channel(0);
+        Self { inner, ended }
+    }
+
+    /// Changes whenever a session of this provider ends.
+    fn finished(&self) -> watch::Receiver<u64> {
+        self.ended.subscribe()
+    }
+}
+
+#[async_trait::async_trait]
+impl<P> Provider for WatchingProvider<P>
+where
+    P: Provider + Sync,
+    P::Session: Send + 'static,
+{
+    type Session = WatchingSession<P::Session>;
+
+    async fn create_session(&self) -> CoreResult<Self::Session> {
+        let session = self.inner.create_session().await?;
+        Ok(WatchingSession {
+            inner: session,
+            ended: self.ended.clone(),
+        })
+    }
+
+    fn audio_format(&self) -> EncodedAudioFormat {
+        self.inner.audio_format()
+    }
+}
+
+/// Session wrapper that counts its own end.
+struct WatchingSession<S> {
+    inner: S,
+    ended: watch::Sender<u64>,
+}
+
+impl<S: ProviderSession + Send + 'static> ProviderSession for WatchingSession<S> {
+    fn spawn(
+        self,
+        capture_stream: BoxStream<'static, Audio>,
+        playback_sink: BoxSink<'static, Audio, CoreError>,
+        pipelines: Pipelines,
+        cancel: tokio_util::sync::CancellationToken,
+        event_tx: Option<mpsc::UnboundedSender<SessionEvent>>,
+    ) -> JoinHandle<CoreResult<Pipelines>> {
+        let handle = self
+            .inner
+            .spawn(capture_stream, playback_sink, pipelines, cancel, event_tx);
+        let ended = self.ended;
+
+        tokio::spawn(async move {
+            let result = handle.await;
+            // Signal first, so the supervisor reconnects even if the session
+            // task panicked rather than returned.
+            ended.send_modify(|generation| *generation = generation.wrapping_add(1));
+            match result {
+                Ok(inner) => inner,
+                Err(error) => Err(CoreError::Internal(format!("задача сессии: {error}"))),
+            }
+        })
     }
 }
 
 /// Build the translation provider named by the configuration.
-fn build_provider(cfg: &CoreConfig) -> Result<OpenAITranslationProvider, SourceError> {
+///
+/// The provider is wrapped so that the supervisor learns when its session ends:
+/// the line owns the provider, and this is the only place where that fact can
+/// be observed without touching the library.
+fn build_provider(
+    cfg: &CoreConfig,
+) -> Result<WatchingProvider<OpenAITranslationProvider>, SourceError> {
     match cfg.provider.as_str() {
         "openai/translation" => {
             let mut config = OpenAITranslationConfig::from_env()
                 .map_err(|e| SourceError::Provider(e.to_string()))?;
             config.with_lang(&cfg.target_lang);
 
-            Ok(OpenAITranslationProvider::new(config))
+            Ok(WatchingProvider::new(OpenAITranslationProvider::new(
+                config,
+            )))
         }
         other => Err(SourceError::UnknownProvider(other.to_string())),
     }
@@ -433,6 +657,55 @@ fn playback(
 mod tests {
     use super::*;
     use crate::config::CoreConfig;
+    use futures_util::{SinkExt, StreamExt};
+
+    /// Провайдерская сессия, которая заканчивается сразу: проверяет ту самую
+    /// связку, на которой держится переподключение, — «сессия кончилась» должно
+    /// быть видно снаружи линии.
+    struct EndingSession;
+
+    impl ProviderSession for EndingSession {
+        fn spawn(
+            self,
+            _capture: BoxStream<'static, Audio>,
+            _sink: BoxSink<'static, Audio, CoreError>,
+            pipelines: Pipelines,
+            _cancel: tokio_util::sync::CancellationToken,
+            _events: Option<mpsc::UnboundedSender<SessionEvent>>,
+        ) -> JoinHandle<CoreResult<Pipelines>> {
+            tokio::spawn(async move { Ok(pipelines) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_that_ends_is_reported_to_the_supervisor() {
+        let (ended, mut finished) = watch::channel(0u64);
+        let session = WatchingSession {
+            inner: EndingSession,
+            ended,
+        };
+
+        let handle = session.spawn(
+            futures_util::stream::empty::<Audio>().boxed(),
+            Box::pin(
+                futures_util::sink::drain()
+                    .sink_map_err(|never: std::convert::Infallible| match never {}),
+            ),
+            Pipelines::with_stats(Arc::new(LatencyStats::default())),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+        );
+
+        assert!(
+            handle.await.expect("задача сессии").is_ok(),
+            "сессия завершилась без ошибки"
+        );
+        tokio::time::timeout(Duration::from_secs(1), finished.changed())
+            .await
+            .expect("сигнал об окончании сессии не пришёл")
+            .expect("канал сигнала жив");
+        assert_eq!(*finished.borrow(), 1, "окончание сессии обязано считаться");
+    }
 
     fn config(provider: &str) -> CoreConfig {
         CoreConfig {
@@ -443,6 +716,7 @@ mod tests {
             output_device: "default".to_string(),
             voice: None,
             transcription_model: None,
+            session_reconnect_minutes: 55,
         }
     }
 

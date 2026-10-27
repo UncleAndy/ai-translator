@@ -54,6 +54,14 @@ pub struct CoreConfig {
     /// translation provider performs recognition itself).
     #[serde(default)]
     pub transcription_model: Option<String>,
+    /// Replace the provider session after this many minutes, before the
+    /// provider closes it on its own; `0` reconnects only when a session
+    /// actually ends.
+    ///
+    /// The provider allows a session to live for 60 minutes and then stops the
+    /// translation; the default keeps a margin for a long phrase in progress.
+    #[serde(default = "default_session_reconnect_minutes")]
+    pub session_reconnect_minutes: u32,
 }
 
 /// Section `[sink]` with the arrays `[[sink.text]]` and `[[sink.voice]]`.
@@ -360,6 +368,14 @@ impl Config {
             }
         }
 
+        if self.core.session_reconnect_minutes > 60 {
+            notes.push(format!(
+                "session_reconnect_minutes = {}: провайдер закрывает сессию через 60 минут, \
+                 и перевод прервётся раньше, чем начнётся переподключение",
+                self.core.session_reconnect_minutes
+            ));
+        }
+
         notes
     }
 
@@ -592,6 +608,12 @@ fn default_provider() -> String {
     "openai/translation".to_string()
 }
 
+/// 55 minutes: the provider stops a session at 60, and a phrase in progress
+/// must fit in the margin.
+fn default_session_reconnect_minutes() -> u32 {
+    55
+}
+
 fn default_source_lang() -> String {
     "auto".to_string()
 }
@@ -613,6 +635,7 @@ impl Default for CoreConfig {
             output_device: default_device(),
             voice: None,
             transcription_model: None,
+            session_reconnect_minutes: default_session_reconnect_minutes(),
         }
     }
 }
@@ -683,6 +706,44 @@ fn default_min_line_size_vw() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reconnect_timer_defaults_to_five_minutes_before_the_limit() {
+        let cfg: Config = toml::from_str("[core]\ntarget_lang = \"ru\"\n").expect("конфигурация");
+        assert_eq!(cfg.core.session_reconnect_minutes, 55);
+
+        assert!(
+            cfg.warnings().is_empty(),
+            "пятнадцать минут запаса — не повод для предупреждения: {:?}",
+            cfg.warnings()
+        );
+    }
+
+    #[test]
+    fn the_reconnect_timer_is_read_from_the_configuration() {
+        let cfg: Config =
+            toml::from_str("[core]\ntarget_lang = \"ru\"\nsession_reconnect_minutes = 30\n")
+                .expect("конфигурация");
+        assert_eq!(cfg.core.session_reconnect_minutes, 30);
+
+        let off: Config =
+            toml::from_str("[core]\ntarget_lang = \"ru\"\nsession_reconnect_minutes = 0\n")
+                .expect("ноль допустим");
+        assert_eq!(off.core.session_reconnect_minutes, 0);
+    }
+
+    #[test]
+    fn a_timer_beyond_the_provider_limit_is_flagged() {
+        let cfg: Config =
+            toml::from_str("[core]\ntarget_lang = \"ru\"\nsession_reconnect_minutes = 90\n")
+                .expect("конфигурация");
+
+        assert!(
+            cfg.warnings().iter().any(|note| note.contains("60 минут")),
+            "переподключение позже лимита обязано быть замечено: {:?}",
+            cfg.warnings()
+        );
+    }
 
     #[test]
     fn the_screen_poster_comes_from_the_configuration() {

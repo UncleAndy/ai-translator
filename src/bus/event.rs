@@ -63,6 +63,8 @@ pub enum LineState {
     Starting,
     /// Translation is running.
     Running,
+    /// The provider session ended and a new one is being opened.
+    Reconnecting,
     /// The line stopped in an orderly way.
     Stopped,
     /// The line stopped because of an error.
@@ -84,6 +86,7 @@ impl LineState {
             LineState::Created => "created",
             LineState::Starting => "starting",
             LineState::Running => "running",
+            LineState::Reconnecting => "reconnecting",
             LineState::Stopped => "stopped",
             LineState::Failed => "failed",
         }

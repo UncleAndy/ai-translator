@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The provider ends a translation session after about an hour; the program now opens
+the next one by itself.
+
+### Added
+
+- The provider session is replaced automatically, so a broadcast outlives the
+  provider's one-hour limit instead of stopping with it. The default timer reconnects
+  at 55 minutes, before the limit, in a pause between phrases;
+  `[core] session_reconnect_minutes` changes it and `0` leaves only the reconnect
+  after an actual end (a broken network, a closed socket, an idle timeout).
+- The replacement runs in its own task (`src/source/reconnect.rs`), so sinks, the
+  transcript and the screen keep working across it: the phrase in progress is flushed
+  by the bridge before the old session is closed, the new one continues on the same
+  bus. Attempts back off from half a second to half a minute; a refused key or an
+  exhausted quota pauses for a minute instead of hammering the provider, and the
+  supervisor keeps trying slowly rather than leaving the line silent.
+- `LineState::Reconnecting` reaches the screen, which now says «переподключение…»
+  instead of showing the last phrase as if nothing happened.
+- Eight tests cover the supervisor with a fake session: replacement after an end, a
+  transient failure retried, a refusal not hammered, a stop during a backoff, the
+  proactive timer, a session that never comes back, error classification and the
+  timer setting.
+
 ## [0.2.5] - 2026-10-23
 
 An installer for Windows, and one rule for every package: the Telegram voice-chat

@@ -5,6 +5,8 @@ use crate::config::CoreConfig;
 
 /// Audio source wired to the transono synchronous translation provider.
 pub mod audio;
+/// Replacing a provider session when the provider ends it.
+pub mod reconnect;
 /// Scripted source replaying a fixed event sequence for tests and offline runs.
 pub mod script;
 /// Silent playback used when the configuration asks for no local output.
@@ -42,6 +44,7 @@ mod tests {
             output_device: "default".to_string(),
             voice: None,
             transcription_model: None,
+            session_reconnect_minutes: 55,
         }
     }
 

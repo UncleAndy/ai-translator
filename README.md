@@ -170,6 +170,16 @@ diagnostic names the field and lists the accepted ones. The full list of paramet
 with comments is `examples/config.all.toml`; the shortest one is
 `examples/config.minimal.toml`.
 
+A provider session does not live forever: OpenAI closes one after an hour, and the
+translation used to stop there until the program was restarted. It now replaces the
+session itself — before the limit, at 55 minutes by default
+(`[core] session_reconnect_minutes`, `0` turns the timer off and leaves only the
+reconnect after an actual end), or as soon as a session ends for any other reason:
+a broken network, a closed socket, an idle timeout. The sinks, the transcript and the
+screen keep running across the change; the screen says «переподключение…» while it
+happens, and the log records the gap. A wrong key or an exhausted quota is not retried
+every second: the program reports the failure and then tries rarely, once a minute.
+
 ```toml
 [core]
 provider = "openai/translation"
