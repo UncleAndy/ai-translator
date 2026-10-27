@@ -1,60 +1,60 @@
-## Перевод переживает лимит провайдера
+## The broadcast outlives the provider session
 
-С 0.2.6 трансляция не заканчивается на 60-й минуте.
+From 0.2.6 the translation no longer dies at the sixty-minute mark.
 
-Ограничение не наше: OpenAI закрывает сессию перевода примерно через час работы, и до сих пор это означало конец эфира — помогало только перезапустить программу. Причина была не в ключах и не в сети: приложение создавало сессию ровно один раз и больше никогда. Теперь сессию заменяет надзиратель внутри того же процесса.
+The limit is not ours. OpenAI closes a translation session after about an hour of work, and until now that was the end of the broadcast: the only way back was to restart the program. The cause was never the key or the network — the program opened exactly one session and never another. Now a supervisor inside the same process replaces it.
 
-### Что происходит на границе часа
+### What happens at the hour boundary
 
-- За минуту-две до предела (по умолчанию — на 55-й минуте) текущая сессия закрывается, и открывается новая. Разрыв приходится на паузу между фразами, поэтому речь не рвётся на середине слова.
-- Если сессия оборвалась раньше — сеть, закрытый сокет, простой, — переподключение происходит сразу, без ожидания таймера.
-- Приёмники, транскрипт и экран не пересоздаются: шина та же, поэтому экран и запись продолжают жить, а фраза, которая звучала в момент разрыва, дописывается до конца.
-- Экран вместо застывшей последней фразы показывает «переподключение…», а после восстановления возвращается к «на связи».
-- В логе видно оба конца события: `сессия перевода завершилась (…)` и `сессия перевода восстановлена: попытка N, разрыв …`.
+- A minute or two before the limit — at 55 minutes by default — the current session is closed and a new one is opened. The change lands in a pause between phrases, so speech does not break mid-word.
+- If a session ends earlier — a network drop, a closed socket, an idle timeout — the replacement starts at once instead of waiting for the timer.
+- Sinks, the transcript and the screen are not rebuilt: it is the same bus, so the screen and the recording keep going, and the phrase that was playing when the session ended is flushed to its end.
+- The screen stops showing a frozen last phrase and says «переподключение…» instead; afterwards it goes back to the live state.
+- The log records both ends of the event: `сессия перевода завершилась (…)` and `сессия перевода восстановлена: попытка N, разрыв …`.
 
-### Если провайдер не отвечает
+### When the provider refuses
 
-- Попытки идут с нарастающей паузой: полсекунды, секунда, две, до тридцати.
-- Неверный ключ или исчерпанная квота (401, 403, 429) не долбятся каждые полсекунды: программа сообщает о проблеме и повторяет раз в минуту.
-- После шести быстрых попыток переподключение не прекращается — оно становится редким. Эфир важнее аккуратного лимита: тишина навсегда не наступает.
+- Attempts back off: half a second, a second, two, up to thirty.
+- A wrong key or an exhausted quota (401, 403, 429) is not hammered every half second: the program reports the failure and then retries once a minute.
+- After six quick attempts the reconnection does not stop — it becomes rare. A broadcast matters more than a tidy retry budget: silence never becomes permanent.
 
-### Настройка
+### Configuration
 
-Одно поле в `[core]`:
+One field in `[core]`:
 
 ```toml
 [core]
-session_reconnect_minutes = 55   # умолчание: за пять минут до лимита провайдера
+session_reconnect_minutes = 55   # default: five minutes before the provider limit
 ```
 
-- `0` — не переподключаться по таймеру, реагировать только на реальный обрыв.
-- Значение больше 60 `check` отметит предупреждением: провайдер закроет сессию раньше, чем начнётся переподключение.
+- `0` turns the timer off and leaves only the reconnect after an actual end.
+- A value above 60 is flagged by `check`: the provider will close the session before the replacement begins.
 
-Для быстрой проверки поставьте `1` — цикл сработает через минуту, и в логе будет видна вся последовательность.
+For a quick test set it to `1` — the cycle fires after a minute, and the whole sequence becomes visible in the log.
 
-### Что не изменилось
+### What did not change
 
-Формат конфигурации, провайдеры, приёмники, экран, установщик Windows и пакеты — те же, что в 0.2.5. Правок в библиотеке `transono` нет: сигнал об окончании сессии берётся обёрткой провайдера в приложении.
+The configuration format, the providers, the sinks, the screen, the Windows installer and the packaging scripts are the same as in 0.2.5. Nothing changed in the `transono` library: the end of a session is observed by a wrapper around the provider inside this application.
 
-### Проверено и не проверено
+### Tested and not tested
 
-Проверено: 168 модульных тестов, из них восемь — на сам надзиратель (обрыв, отказ, остановка во время паузы, таймер, отказ ключа, исчерпание попыток); сборка с голосовым приёмником, clippy без предупреждений, логика страницы экрана.
+Tested: 168 unit tests, eight of them on the supervisor itself (an ended session, a refused attempt, stopping during a backoff, the timer, a refused key, exhausted attempts); a build with the voice-chat sink; clippy without warnings; the logic of the screen page.
 
-Не проверено: двухчасовой живой эфир через границу часа. Это требует ключа провайдера и звуковой карты, поэтому первый настоящий прогон — за вами. Признак успеха: эфир идёт дальше без перезапуска, в логе один стык, экран мигает «переподключение…» и возвращается.
+Not tested: a two-hour live broadcast across the hour boundary. That needs a provider key and a sound card, so the first real run is yours. The sign of success: the broadcast continues without a restart, the log shows one handover, and the screen blinks «переподключение…» and returns.
 
-### Файлы
+### Files
 
-| Файл | Платформа |
+| File | Platform |
 |---|---|
 | `ai-translator-0.2.6-x86_64-linux.tar.gz`, `.deb`, `.rpm`, `.AppImage` | Linux x86_64 |
 | `ai-translator-0.2.6-aarch64-macos.tar.gz`, `.dmg` | macOS, Apple Silicon |
-| `ai-translator-0.2.6-x86_64-windows.zip` | Windows 10/11 x86_64, портативный |
-| `ai-translator-0.2.6-x86_64-windows.msi` | Windows 10/11 x86_64, установщик |
-| `SHA256SUMS` | контрольные суммы всех файлов |
+| `ai-translator-0.2.6-x86_64-windows.zip` | Windows 10/11 x86_64, portable |
+| `ai-translator-0.2.6-x86_64-windows.msi` | Windows 10/11 x86_64, installer |
+| `SHA256SUMS` | checksums of every file |
 
-### Известные ограничения
+### Known limitations
 
-- **Ничего не подписано.** Установщик покажет неизвестного издателя, архив вызовет SmartScreen один раз; целостность закрывает `SHA256SUMS`.
-- **Пакетов для Intel-маков нет** — у движка голосового чата нет сборки под эту архитектуру.
-- **Разрыв в пару секунд возможен.** Фраза, звучавшая в момент перехода, может потеряться — это видно как пауза, дублей не будет.
-- **Одна сессия — одна плата.** Если провайдер тарифицирует каждую сессию отдельно, час эфира будет стоить как два подключения; проверьте по счёту.
+- **Nothing is signed.** The installer will show an unknown publisher, and the archive trips SmartScreen once; `SHA256SUMS` covers integrity.
+- **No packages for Intel Macs** — the voice-chat engine has no build for that architecture.
+- **A gap of a second or two is possible.** A phrase playing at the moment of the handover may be lost; it shows as a pause, not as a duplicate.
+- **One session, one charge.** If the provider bills each session separately, an hour of broadcast costs like two connections; check the invoice.
