@@ -72,7 +72,7 @@ Of course, AI interpretation is not perfect. Translation accuracy, latency, netw
 
 But this event demonstrated something valuable: modern AI models, combined with relatively simple open-source infrastructure, can already provide practical live translation at a remarkably low cost.
 
-[Montelibero Festival 2026 - International Communities: What We Are Building (embedded video)](https://www.youtube.com/live/vvJRLUW9GcE?si=4y_YREzF8kWZz86w&t=2113)
+[Montelibero Festival 2026 - International Communities: What We Are Building](https://www.youtube.com/live/vvJRLUW9GcE?si=4y_YREzF8kWZz86w&t=2113)
 
 ## What Surprised Me Most
 
